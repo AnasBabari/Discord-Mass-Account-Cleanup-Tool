@@ -22,11 +22,14 @@ REQUEST_DELAY = 0.6  # seconds between requests (be polite to the API)
 
 # ── Shared API Request Helper ─────────────────────────────────────────────────
 
-def _make_api_request(method: str, endpoint: str, token: str, max_retries: int = 5, **kwargs) -> requests.Response:
+
+def _make_api_request(
+    method: str, endpoint: str, token: str, max_retries: int = 5, **kwargs
+) -> requests.Response:
     """Helper for Discord API requests with consistent rate-limit and timeout handling."""
     headers = {"Authorization": token}
     url = f"{BASE_URL}{endpoint}"
-    
+
     retries = 0
     while retries < max_retries:
         try:
@@ -36,7 +39,7 @@ def _make_api_request(method: str, endpoint: str, token: str, max_retries: int =
             retries += 1
             time.sleep(2)
             continue
-            
+
         if r.status_code == 429:
             try:
                 wait = float(r.json().get("retry_after", 5.0))
@@ -46,13 +49,14 @@ def _make_api_request(method: str, endpoint: str, token: str, max_retries: int =
             time.sleep(wait)
             retries += 1
             continue
-            
+
         return r
-        
+
     raise RuntimeError(f"Max retries ({max_retries}) exceeded for {method} {endpoint}")
 
 
 # ── API helpers (Servers) ─────────────────────────────────────────────────────
+
 
 def get_guilds(token: str) -> list[dict]:
     """Fetch all guilds the user is in (handles pagination)."""
@@ -69,7 +73,7 @@ def get_guilds(token: str) -> list[dict]:
         if r.status_code == 401:
             raise ValueError("\n✗  Invalid token — please double-check and try again.")
         r.raise_for_status()
-        
+
         page = r.json()
         guilds.extend(page)
 
@@ -88,16 +92,17 @@ def leave_guild(token: str, guild_id: str) -> tuple[int, str]:
 
 # ── API helpers (Friends) ─────────────────────────────────────────────────────
 
+
 def get_friends(token: str) -> list[dict]:
     """Fetch all friends."""
     r = _make_api_request("GET", "/users/@me/relationships", token)
-    
+
     if r.status_code == 401:
         raise ValueError("\n✗  Invalid token — please double-check and try again.")
     r.raise_for_status()
-    
+
     relationships = r.json()
-    
+
     # type 1 is friend
     friends = [rel for rel in relationships if rel.get("type") == 1]
     return friends
@@ -111,10 +116,11 @@ def remove_friend(token: str, user_id: str) -> tuple[int, str]:
 
 # ── API helpers (Read States) ─────────────────────────────────────────────────
 
+
 def get_dms(token: str) -> list[dict]:
     """Fetch all direct message channels (DMs and Group DMs)."""
     r = _make_api_request("GET", "/users/@me/channels", token)
-    
+
     if r.status_code == 401:
         raise ValueError("\n✗  Invalid token — please double-check and try again.")
     r.raise_for_status()
@@ -124,11 +130,14 @@ def get_dms(token: str) -> list[dict]:
 def mark_channel_read(token: str, channel_id: str, message_id: str) -> tuple[int, str]:
     """Acknowledge a channel up to the given message_id."""
     payload = {"token": None}
-    r = _make_api_request("POST", f"/channels/{channel_id}/messages/{message_id}/ack", token, json=payload)
+    r = _make_api_request(
+        "POST", f"/channels/{channel_id}/messages/{message_id}/ack", token, json=payload
+    )
     return r.status_code, r.text
 
 
 # ── Selection parser ──────────────────────────────────────────────────────────
+
 
 def parse_selection(text: str, max_index: int) -> list[int]:
     """
@@ -151,13 +160,14 @@ def parse_selection(text: str, max_index: int) -> list[int]:
             indices.add(int(part))
 
     valid = sorted(i for i in indices if 1 <= i <= max_index)
-    oob   = sorted(i for i in indices if not (1 <= i <= max_index))
+    oob = sorted(i for i in indices if not (1 <= i <= max_index))
     if oob:
         print(f"   ⚠  Ignoring out-of-range number(s): {', '.join(map(str, oob))}")
     return valid
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def mass_leave_servers(token: str) -> None:
     print("\nFetching your servers…")
@@ -178,10 +188,12 @@ def mass_leave_servers(token: str) -> None:
         return
 
     leavable = [g for g in all_guilds if not g.get("owner")]
-    owned    = [g for g in all_guilds if g.get("owner")]
+    owned = [g for g in all_guilds if g.get("owner")]
 
-    print(f"\nFound {len(all_guilds)} server(s)  "
-          f"({len(leavable)} leavable, {len(owned)} owned by you)\n")
+    print(
+        f"\nFound {len(all_guilds)} server(s)  "
+        f"({len(leavable)} leavable, {len(owned)} owned by you)\n"
+    )
 
     if not leavable:
         print("You own all your servers — nothing to leave.")
@@ -246,7 +258,7 @@ def mass_leave_servers(token: str) -> None:
         except Exception as e:
             print(f"  ✗  Failed: {g['name']}  (Error: {e})")
             failed += 1
-            
+
         time.sleep(REQUEST_DELAY)
 
     print(f"\nDone — left {success}, failed {failed}.")
@@ -320,7 +332,7 @@ def mass_remove_friends(token: str) -> None:
     for f in selected:
         user_id = f["id"]
         display = f["user"].get("global_name") or f["user"]["username"]
-        
+
         try:
             status, text = remove_friend(token, user_id)
             if status == 204:
@@ -332,7 +344,7 @@ def mass_remove_friends(token: str) -> None:
         except Exception as e:
             print(f"  ✗  Failed:  {display}  (Error: {e})")
             failed += 1
-            
+
         time.sleep(REQUEST_DELAY)
 
     print(f"\nDone — removed {success}, failed {failed}.")
@@ -355,11 +367,11 @@ def mass_mark_read(token: str) -> None:
     if not channels:
         print("No DM channels found.")
         return
-        
+
     valid_channels = [c for c in channels if c.get("last_message_id")]
-    
+
     print(f"\nFound {len(valid_channels)} DM(s) to process.\n")
-    
+
     confirm = input("Type 'yes' to mark all these DMs as read: ").strip()
     if confirm.lower() != "yes":
         print("Cancelled.")
@@ -370,16 +382,20 @@ def mass_mark_read(token: str) -> None:
     for c in valid_channels:
         channel_id = c["id"]
         message_id = c["last_message_id"]
-        
+
         name = "Unknown DM"
         if c.get("name"):
             name = c["name"]
         elif c.get("recipients") and len(c["recipients"]) > 0:
             if len(c["recipients"]) == 1:
-                name = c["recipients"][0].get("global_name") or c["recipients"][0].get("username") or "User"
+                name = (
+                    c["recipients"][0].get("global_name")
+                    or c["recipients"][0].get("username")
+                    or "User"
+                )
             else:
                 name = "Group Chat"
-                
+
         try:
             status, text = mark_channel_read(token, channel_id, message_id)
             if status in (200, 204):
@@ -391,7 +407,7 @@ def mass_mark_read(token: str) -> None:
         except Exception as e:
             print(f"  ✗  Failed:      {name}  (Error: {e})")
             failed += 1
-            
+
         time.sleep(REQUEST_DELAY)
 
     print(f"\nDone — marked read {success}, failed {failed}.")
@@ -404,10 +420,10 @@ def main() -> None:
     print("⚠  This uses your Discord user token, which is technically")
     print("   self-botting and against Discord's ToS. Low risk for")
     print("   a one-off cleanup, but use at your own discretion.\n")
-    
+
     load_dotenv()
     env_token = os.getenv("DISCORD_TOKEN")
-    
+
     if env_token:
         print("Using token from .env file.")
         token = env_token.strip()
@@ -431,20 +447,21 @@ def main() -> None:
         print("  [2] Mass Remove Friends")
         print("  [3] Mass Mark DMs as Read")
         print("  [q] Quit\n")
-        
+
         choice = input("Select an option > ").strip().lower()
-        
-        if choice == '1':
+
+        if choice == "1":
             mass_leave_servers(token)
-        elif choice == '2':
+        elif choice == "2":
             mass_remove_friends(token)
-        elif choice == '3':
+        elif choice == "3":
             mass_mark_read(token)
-        elif choice == 'q':
+        elif choice == "q":
             print("Exiting...")
             break
         else:
             print("Invalid choice. Please select 1, 2, 3, or q.")
+
 
 if __name__ == "__main__":
     main()
