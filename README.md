@@ -1,6 +1,9 @@
 # Discord Mass Account Cleanup Tool
 
-A Python script that lets you clean up your Discord account. You can fetch and mass leave servers, as well as fetch and mass remove friends (by number, range, or 'all') in one go via an interactive menu.
+A Python script that lets you clean up your Discord account. Through an interactive menu, you can:
+- **Mass leave servers** (by number, range, or 'all')
+- **Mass remove friends** (by number, range, or 'all')
+- **Mass mark DMs as read** (including Group Chats)
 
 ![Screenshot](screenshot.png)
 
@@ -20,7 +23,7 @@ Run the script via terminal or command prompt:
 python discord_mass_cleanup.py
 ```
 
-Follow the on-screen instructions. You will be prompted to paste your user token and then choose whether to mass leave servers or mass remove friends. 
+Follow the on-screen instructions. You will be prompted to paste your user token securely and then choose which cleanup operation you want to perform.
 
 Alternatively, if you plan to run the script multiple times, you can use the provided `.env.example` file. Simply copy it, rename the copy to `.env`, and paste your token in:
 
@@ -39,6 +42,13 @@ To get your Discord account's authorization token (which allows you to control y
 5. In the left sidebar, expand Local Storage and click on https://discord.com.
 6. Press Ctrl + Shift + M (or Cmd + Shift + M) to toggle device emulation to "Mobile". (Discord often hides the token from local storage on desktop views, so this step makes it visible).
 7. Type "token" into the filter search bar. Your token will appear on the right. (Copy the actual text, excluding the surrounding quotes).
+
+## Testing
+
+This project includes a comprehensive test suite mocking API responses to handle rate limits, pagination, and edge cases. To run the tests:
+```bash
+pytest test_discord_mass_cleanup.py
+```
 
 ## License
 
