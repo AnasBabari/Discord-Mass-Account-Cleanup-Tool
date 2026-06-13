@@ -4,6 +4,7 @@ A Python script that lets you clean up your Discord account. Through an interact
 - **Mass leave servers** (by number, range, or 'all')
 - **Mass remove friends** (by number, range, or 'all')
 - **Mass mark DMs as read** (including Group Chats)
+- **Mass mark Servers as read**
 
 ![Screenshot](screenshot.png)
 
