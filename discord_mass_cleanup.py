@@ -17,7 +17,7 @@ import pwinput
 from dotenv import load_dotenv
 
 BASE_URL = "https://discord.com/api/v10"
-REQUEST_DELAY = 0.5  # seconds between requests
+REQUEST_DELAY = 0.6  # seconds between requests (be polite to the API)
 
 
 # ── Shared API Request Helper ─────────────────────────────────────────────────
@@ -38,6 +38,17 @@ def _make_api_request(
             print("  ⏳  Request timed out — retrying…")
             retries += 1
             time.sleep(2)
+            continue
+
+        if r.status_code == 429:
+            try:
+                # If we get a Cloudflare 1015, r.json() will fail. We default to 5.0s
+                wait = float(r.json().get("retry_after", 5.0))
+            except (ValueError, requests.exceptions.JSONDecodeError):
+                wait = 5.0
+            print(f"  ⏳  Rate-limited — waiting {wait:.2f}s…")
+            time.sleep(wait)
+            retries += 1
             continue
 
         return r
