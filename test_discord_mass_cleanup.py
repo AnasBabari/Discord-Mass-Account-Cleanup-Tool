@@ -465,14 +465,14 @@ def test_mass_mark_read_req_error(mock_get_dms, capsys):
 # --- Main menu tests ---
 
 @patch("builtins.input")
-@patch("getpass.getpass")
+@patch("pwinput.pwinput")
 @patch("os.getenv")
 @patch("discord_mass_cleanup.mass_leave_servers")
 @patch("discord_mass_cleanup.mass_remove_friends")
 @patch("discord_mass_cleanup.mass_mark_read")
-def test_main_menu(mock_mark, mock_remove, mock_leave, mock_getenv, mock_getpass, mock_input, capsys):
+def test_main_menu(mock_mark, mock_remove, mock_leave, mock_getenv, mock_pwinput, mock_input, capsys):
     mock_getenv.return_value = None
-    mock_getpass.return_value = "my_token"
+    mock_pwinput.return_value = "my_token"
     # choice 1, 2, 3, invalid choice, q
     mock_input.side_effect = ["1", "2", "3", "9", "q"]
     
@@ -485,11 +485,11 @@ def test_main_menu(mock_mark, mock_remove, mock_leave, mock_getenv, mock_getpass
     assert "Invalid choice" in captured
     assert "Exiting..." in captured
 
-@patch("getpass.getpass")
+@patch("pwinput.pwinput")
 @patch("os.getenv")
-def test_main_no_token(mock_getenv, mock_getpass, capsys):
+def test_main_no_token(mock_getenv, mock_pwinput, capsys):
     mock_getenv.return_value = None
-    mock_getpass.return_value = ""
+    mock_pwinput.return_value = ""
     dmc.main()
     assert "No token entered. Exiting." in capsys.readouterr().out
 
