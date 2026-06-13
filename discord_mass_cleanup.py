@@ -136,6 +136,12 @@ def mark_channel_read(token: str, channel_id: str, message_id: str) -> tuple[int
     return r.status_code, r.text
 
 
+def mark_guild_read(token: str, guild_id: str) -> tuple[int, str]:
+    """Acknowledge all messages in a guild."""
+    r = _make_api_request("POST", f"/guilds/{guild_id}/ack", token, json={})
+    return r.status_code, r.text
+
+
 # ── Selection parser ──────────────────────────────────────────────────────────
 
 
@@ -413,6 +419,54 @@ def mass_mark_read(token: str) -> None:
     print(f"\nDone — marked read {success}, failed {failed}.")
 
 
+def mass_mark_guilds_read(token: str) -> None:
+    print("\nFetching your servers…")
+    try:
+        all_guilds = get_guilds(token)
+    except ValueError as e:
+        print(e)
+        return
+    except requests.RequestException as e:
+        print(f"\n✗  Network/API error fetching servers: {e}")
+        return
+    except RuntimeError as e:
+        print(f"\n✗  Runtime error: {e}")
+        return
+
+    if not all_guilds:
+        print("No servers found.")
+        return
+
+    print(f"\nFound {len(all_guilds)} server(s) to process.\n")
+
+    confirm = input("Type 'yes' to mark all these servers as read: ").strip()
+    if confirm.lower() != "yes":
+        print("Cancelled.")
+        return
+
+    print()
+    success = failed = 0
+    for g in all_guilds:
+        guild_id = g["id"]
+        name = g["name"]
+
+        try:
+            status, text = mark_guild_read(token, guild_id)
+            if status in (200, 204):
+                print(f"  ✓  Marked Read: {name}")
+                success += 1
+            else:
+                print(f"  ✗  Failed:      {name}  (HTTP {status} - {text})")
+                failed += 1
+        except Exception as e:
+            print(f"  ✗  Failed:      {name}  (Error: {e})")
+            failed += 1
+
+        time.sleep(REQUEST_DELAY)
+
+    print(f"\nDone — marked read {success}, failed {failed}.")
+
+
 def main() -> None:
     print("\n╔══════════════════════════════════════════╗")
     print("║   Discord Mass Account Cleanup Tool      ║")
@@ -450,6 +504,7 @@ def main() -> None:
         print("  [1] Mass Leave Servers")
         print("  [2] Mass Remove Friends")
         print("  [3] Mass Mark DMs as Read")
+        print("  [4] Mass Mark Servers as Read")
         print("  [q] Quit\n")
 
         choice = input("Select an option > ").strip().lower()
@@ -460,11 +515,13 @@ def main() -> None:
             mass_remove_friends(token)
         elif choice == "3":
             mass_mark_read(token)
+        elif choice == "4":
+            mass_mark_guilds_read(token)
         elif choice == "q":
             print("Exiting...")
             break
         else:
-            print("Invalid choice. Please select 1, 2, 3, or q.")
+            print("Invalid choice. Please select 1, 2, 3, 4, or q.")
 
 
 if __name__ == "__main__":
