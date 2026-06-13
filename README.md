@@ -6,7 +6,7 @@ A Python script that lets you clean up your Discord account. Through an interact
 - **Mass mark DMs as read** (including Group Chats)
 - **Mass mark Servers as read**
 
-![Screenshot](screenshot.png)
+![Screenshot](assets/screenshot.png)
 
 ⚠️ **Disclaimer:** This tool uses your personal Discord user token. Automating user accounts ("self-botting") is against Discord's Terms of Service. Use this at your own discretion. It is generally low risk for a one-off cleanup, but you are solely responsible for your account.
 
