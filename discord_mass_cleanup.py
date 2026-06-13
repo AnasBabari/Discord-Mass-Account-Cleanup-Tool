@@ -4,7 +4,7 @@ Discord Mass Account Cleanup Tool
 Lets you mass leave servers and mass remove friends.
 
 Requirements:
-    pip install requests python-dotenv
+    pip install requests python-dotenv pwinput
 
 Usage:
     python discord_mass_cleanup.py
@@ -435,7 +435,12 @@ def main() -> None:
         print("  4. Press Ctrl+Shift+M (or Cmd+Shift+M) to toggle Mobile View.")
         print("  5. Type 'token' in the filter box and copy the value without quotes.")
         print("───────────────────────────────────────────────────────────\n")
-        token = pwinput.pwinput("Paste token: ", mask="*").strip()
+        try:
+            token = pwinput.pwinput("Paste token: ", mask="*").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nCancelled.")
+            return
+
     if not token:
         print("No token entered. Exiting.")
         return
