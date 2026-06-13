@@ -540,6 +540,7 @@ def test_mass_mark_read_req_error(mock_get_dms, capsys):
 @patch("builtins.input")
 @patch("pwinput.pwinput")
 @patch("os.getenv")
+@patch("discord_mass_cleanup.check_token")
 @patch("discord_mass_cleanup.mass_leave_servers")
 @patch("discord_mass_cleanup.mass_remove_friends")
 @patch("discord_mass_cleanup.mass_mark_read")
@@ -549,6 +550,7 @@ def test_main_menu(
     mock_mark,
     mock_remove,
     mock_leave,
+    mock_check,
     mock_getenv,
     mock_pwinput,
     mock_input,
@@ -556,6 +558,7 @@ def test_main_menu(
 ):
     mock_getenv.return_value = None
     mock_pwinput.return_value = "my_token"
+    mock_check.return_value = True
     # choice 1, 2, 3, 4, invalid choice, q
     mock_input.side_effect = ["1", "2", "3", "4", "9", "q"]
 
@@ -581,8 +584,10 @@ def test_main_no_token(mock_getenv, mock_pwinput, capsys):
 
 @patch("builtins.input")
 @patch("os.getenv")
-def test_main_env_token(mock_getenv, mock_input, capsys):
+@patch("discord_mass_cleanup.check_token")
+def test_main_env_token(mock_check, mock_getenv, mock_input, capsys):
     mock_getenv.return_value = "env_token"
+    mock_check.return_value = True
     mock_input.side_effect = ["q"]
     dmc.main()
     assert "Using token from .env file." in capsys.readouterr().out

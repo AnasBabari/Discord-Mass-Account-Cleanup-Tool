@@ -142,6 +142,23 @@ def mark_guild_read(token: str, guild_id: str) -> tuple[int, str]:
     return r.status_code, r.text
 
 
+def check_token(token: str) -> bool:
+    """Verifies if the provided token is valid."""
+    print("Verifying token...")
+    try:
+        r = _make_api_request("GET", "/users/@me", token, max_retries=1)
+        if r.status_code == 401:
+            return False
+        r.raise_for_status()
+        user = r.json()
+        display = user.get("global_name") or user.get("username")
+        print(f"  ✓  Logged in as {display} (@{user['username']})")
+        return True
+    except Exception as e:
+        print(f"  ✗  Error verifying token: {e}")
+        return False
+
+
 # ── Selection parser ──────────────────────────────────────────────────────────
 
 
@@ -475,53 +492,70 @@ def main() -> None:
     print("   self-botting and against Discord's ToS. Low risk for")
     print("   a one-off cleanup, but use at your own discretion.\n")
 
-    load_dotenv()
-    env_token = os.getenv("DISCORD_TOKEN")
+    while True:
+        token = ""
+        load_dotenv()
+        env_token = os.getenv("DISCORD_TOKEN")
 
-    if env_token:
-        print("Using token from .env file.")
-        token = env_token.strip()
-    else:
-        print("── How to get your token ──────────────────────────────────")
-        print("  1. Open https://discord.com in your browser and log in.")
-        print("  2. Press F12 to open Developer Tools.")
-        print("  3. Go to Application tab → Local Storage → https://discord.com")
-        print("  4. Press Ctrl+Shift+M (or Cmd+Shift+M) to toggle Mobile View.")
-        print("  5. Type 'token' in the filter box and copy the value without quotes.")
-        print("───────────────────────────────────────────────────────────\n")
-        try:
-            token = pwinput.pwinput("Paste token: ", mask="*").strip()
-        except (KeyboardInterrupt, EOFError):
-            print("\nCancelled.")
+        if env_token:
+            print("Using token from .env file.")
+            token = env_token.strip()
+
+        if not token:
+            print("── How to get your token ──────────────────────────────────")
+            print("  1. Open https://discord.com in your browser and log in.")
+            print("  2. Press F12 to open Developer Tools.")
+            print("  3. Go to Application tab → Local Storage → https://discord.com")
+            print("  4. Press Ctrl+Shift+M (or Cmd+Shift+M) to toggle Mobile View.")
+            print(
+                "  5. Type 'token' in the filter box and copy the value without quotes."
+            )
+            print("───────────────────────────────────────────────────────────\n")
+            try:
+                token = pwinput.pwinput("Paste token: ", mask="*").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\nCancelled.")
+                return
+
+        if not token:
+            print("No token entered. Exiting.")
             return
 
-    if not token:
-        print("No token entered. Exiting.")
-        return
+        if not check_token(token):
+            print("\n✗  Invalid token — please double-check and try again.\n")
+            if "DISCORD_TOKEN" in os.environ:
+                del os.environ["DISCORD_TOKEN"]
+            continue
 
-    while True:
-        print("\nMain Menu:")
-        print("  [1] Mass Leave Servers")
-        print("  [2] Mass Remove Friends")
-        print("  [3] Mass Mark DMs as Read")
-        print("  [4] Mass Mark Servers as Read")
-        print("  [q] Quit\n")
+        while True:
+            print("\nMain Menu:")
+            print("  [1] Mass Leave Servers")
+            print("  [2] Mass Remove Friends")
+            print("  [3] Mass Mark DMs as Read")
+            print("  [4] Mass Mark Servers as Read")
+            print("  [t] Change Token / Switch Account")
+            print("  [q] Quit\n")
 
-        choice = input("Select an option > ").strip().lower()
+            choice = input("Select an option > ").strip().lower()
 
-        if choice == "1":
-            mass_leave_servers(token)
-        elif choice == "2":
-            mass_remove_friends(token)
-        elif choice == "3":
-            mass_mark_read(token)
-        elif choice == "4":
-            mass_mark_guilds_read(token)
-        elif choice == "q":
-            print("Exiting...")
-            break
-        else:
-            print("Invalid choice. Please select 1, 2, 3, 4, or q.")
+            if choice == "1":
+                mass_leave_servers(token)
+            elif choice == "2":
+                mass_remove_friends(token)
+            elif choice == "3":
+                mass_mark_read(token)
+            elif choice == "4":
+                mass_mark_guilds_read(token)
+            elif choice == "t":
+                if "DISCORD_TOKEN" in os.environ:
+                    del os.environ["DISCORD_TOKEN"]
+                print("\nLogging out...")
+                break
+            elif choice == "q":
+                print("Exiting...")
+                return
+            else:
+                print("Invalid choice. Please select 1, 2, 3, 4, t, or q.")
 
 
 if __name__ == "__main__":
