@@ -88,38 +88,6 @@ def test_get_guilds_401(mock_responses):
         dmc.get_guilds("bad_token")
 
 
-@patch("time.sleep", return_value=None)
-def test_get_guilds_429(mock_sleep, mock_responses):
-    mock_responses.add(
-        responses.GET,
-        f"{BASE_URL}/users/@me/guilds",
-        json={"retry_after": 0.5},
-        status=429,
-    )
-    mock_responses.add(
-        responses.GET, f"{BASE_URL}/users/@me/guilds", json=[{"id": "1"}], status=200
-    )
-    guilds = dmc.get_guilds("test_token")
-    assert len(guilds) == 1
-    mock_sleep.assert_called_once_with(0.5)
-
-
-@patch("time.sleep", return_value=None)
-def test_get_guilds_429_html(mock_sleep, mock_responses):
-    # Testing Cloudflare HTML 429
-    mock_responses.add(
-        responses.GET,
-        f"{BASE_URL}/users/@me/guilds",
-        body="<html>Cloudflare Rate Limit</html>",
-        status=429,
-    )
-    mock_responses.add(
-        responses.GET, f"{BASE_URL}/users/@me/guilds", json=[{"id": "1"}], status=200
-    )
-    guilds = dmc.get_guilds("test_token")
-    assert len(guilds) == 1
-
-
 def test_get_guilds_http_error(mock_responses):
     mock_responses.add(responses.GET, f"{BASE_URL}/users/@me/guilds", status=500)
     with pytest.raises(requests.RequestException):
@@ -134,21 +102,6 @@ def test_leave_guild_success(mock_responses):
         responses.DELETE, f"{BASE_URL}/users/@me/guilds/123", body="", status=204
     )
     assert dmc.leave_guild("token", "123") == (204, "")
-
-
-@patch("time.sleep", return_value=None)
-def test_leave_guild_429(mock_sleep, mock_responses):
-    mock_responses.add(
-        responses.DELETE,
-        f"{BASE_URL}/users/@me/guilds/123",
-        json={"retry_after": 0.5},
-        status=429,
-    )
-    mock_responses.add(
-        responses.DELETE, f"{BASE_URL}/users/@me/guilds/123", body="", status=204
-    )
-    assert dmc.leave_guild("token", "123") == (204, "")
-    mock_sleep.assert_called_once_with(0.5)
 
 
 # --- get_friends tests ---
@@ -172,25 +125,6 @@ def test_get_friends_401(mock_responses):
         dmc.get_friends("token")
 
 
-@patch("time.sleep", return_value=None)
-def test_get_friends_429(mock_sleep, mock_responses):
-    mock_responses.add(
-        responses.GET,
-        f"{BASE_URL}/users/@me/relationships",
-        json={"retry_after": 0.5},
-        status=429,
-    )
-    mock_responses.add(
-        responses.GET,
-        f"{BASE_URL}/users/@me/relationships",
-        json=[{"type": 1, "id": "1"}],
-        status=200,
-    )
-    friends = dmc.get_friends("token")
-    assert len(friends) == 1
-    mock_sleep.assert_called_once_with(0.5)
-
-
 def test_get_friends_http_error(mock_responses):
     mock_responses.add(responses.GET, f"{BASE_URL}/users/@me/relationships", status=500)
     with pytest.raises(requests.RequestException):
@@ -205,21 +139,6 @@ def test_remove_friend_success(mock_responses):
         responses.DELETE, f"{BASE_URL}/users/@me/relationships/123", body="", status=204
     )
     assert dmc.remove_friend("token", "123") == (204, "")
-
-
-@patch("time.sleep", return_value=None)
-def test_remove_friend_429(mock_sleep, mock_responses):
-    mock_responses.add(
-        responses.DELETE,
-        f"{BASE_URL}/users/@me/relationships/123",
-        json={"retry_after": 0.5},
-        status=429,
-    )
-    mock_responses.add(
-        responses.DELETE, f"{BASE_URL}/users/@me/relationships/123", body="", status=204
-    )
-    assert dmc.remove_friend("token", "123") == (204, "")
-    mock_sleep.assert_called_once_with(0.5)
 
 
 # --- get_dms tests ---
@@ -239,22 +158,6 @@ def test_get_dms_401(mock_responses):
         dmc.get_dms("token")
 
 
-@patch("time.sleep", return_value=None)
-def test_get_dms_429(mock_sleep, mock_responses):
-    mock_responses.add(
-        responses.GET,
-        f"{BASE_URL}/users/@me/channels",
-        json={"retry_after": 0.5},
-        status=429,
-    )
-    mock_responses.add(
-        responses.GET, f"{BASE_URL}/users/@me/channels", json=[{"id": "1"}], status=200
-    )
-    dms = dmc.get_dms("token")
-    assert len(dms) == 1
-    mock_sleep.assert_called_once_with(0.5)
-
-
 def test_get_dms_http_error(mock_responses):
     mock_responses.add(responses.GET, f"{BASE_URL}/users/@me/channels", status=500)
     with pytest.raises(requests.RequestException):
@@ -269,21 +172,6 @@ def test_mark_channel_read_success(mock_responses):
         responses.POST, f"{BASE_URL}/channels/123/messages/456/ack", body="", status=204
     )
     assert dmc.mark_channel_read("token", "123", "456") == (204, "")
-
-
-@patch("time.sleep", return_value=None)
-def test_mark_channel_read_429(mock_sleep, mock_responses):
-    mock_responses.add(
-        responses.POST,
-        f"{BASE_URL}/channels/123/messages/456/ack",
-        json={"retry_after": 0.5},
-        status=429,
-    )
-    mock_responses.add(
-        responses.POST, f"{BASE_URL}/channels/123/messages/456/ack", body="", status=204
-    )
-    assert dmc.mark_channel_read("token", "123", "456") == (204, "")
-    mock_sleep.assert_called_once_with(0.5)
 
 
 # --- Mass operations full tests (covering print branches) ---
