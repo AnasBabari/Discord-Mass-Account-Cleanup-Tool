@@ -4,16 +4,18 @@ Discord Mass Account Cleanup Tool
 Lets you mass leave servers and mass remove friends.
 
 Requirements:
-    pip install requests python-dotenv pwinput
+    pip install requests python-dotenv pwinput websocket-client
 
 Usage:
     python discord_mass_cleanup.py
 """
 
-import requests
 import time
+import requests
 import os
 import pwinput
+import websocket
+import json
 from dotenv import load_dotenv
 
 BASE_URL = "https://discord.com/api/v10"
@@ -145,15 +147,79 @@ def get_dms(token: str) -> list[dict]:
 
 
 def mark_channel_read(token: str, channel_id: str, message_id: str) -> tuple[int, str]:
-    """Acknowledge a channel up to a specific message ID."""
+    """Marks a single channel (or DM) as read up to message_id."""
     r = _make_api_request(
-        "POST", f"/channels/{channel_id}/messages/{message_id}/ack", token, json={}
+        "POST",
+        f"/channels/{channel_id}/messages/{message_id}/ack",
+        token,
+        json={"token": None},
     )
     return r.status_code, get_clean_error(r)
 
 
+def _get_read_states(token: str) -> dict:
+    """Connects to the Discord WS to extract read_states for all channels."""
+    read_states = {}
+    print("  [WS] Connecting to Discord Gateway to fetch read states...")
+
+    def on_message(ws, message):
+        data = json.loads(message)
+        if data.get("op") == 9:
+            print("  [WS] Invalid session! Token might be bad or WS blocked.")
+            ws.close()
+        elif data.get("t") == "READY":
+            d = data.get("d", {})
+            if "read_state" in d and "entries" in d["read_state"]:
+                for entry in d["read_state"]["entries"]:
+                    read_states[entry.get("id")] = entry.get("last_message_id")
+            print("  [WS] Successfully downloaded read states.")
+            ws.close()
+
+    def on_open(ws):
+        payload = {
+            "op": 2,
+            "d": {
+                "token": token,
+                "capabilities": 16381,
+                "properties": {
+                    "os": "Windows",
+                    "browser": "Chrome",
+                    "device": "",
+                },
+                "presence": {
+                    "status": "unknown",
+                    "since": 0,
+                    "activities": [],
+                    "afk": False,
+                },
+                "compress": False,
+                "client_state": {"guild_versions": {}},
+            },
+        }
+        ws.send(json.dumps(payload))
+
+    def on_error(ws, error):
+        pass  # Ignore minor ws errors to prevent crash dumps
+
+    ws = websocket.WebSocketApp(
+        "wss://gateway.discord.gg/?v=9&encoding=json",
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+    )
+    ws.run_forever()
+    return read_states
+
+
+def get_guild_channels(token: str, guild_id: str) -> list[dict]:
+    """Fetches all channels for a given guild."""
+    r = _make_api_request("GET", f"/guilds/{guild_id}/channels", token)
+    r.raise_for_status()
+    return r.json()
+
+
 def mark_guild_read(token: str, guild_id: str) -> tuple[int, str]:
-    """Acknowledge all messages in a guild."""
+    """Legacy function - not used directly for bulk operations anymore."""
     r = _make_api_request("POST", f"/guilds/{guild_id}/ack", token, json={})
     return r.status_code, get_clean_error(r)
 
@@ -493,24 +559,55 @@ def mass_mark_guilds_read(token: str) -> None:
         return
 
     print()
+    read_states_cache = _get_read_states(token)
+
     success = failed = 0
     for g in all_guilds:
         guild_id = g["id"]
         name = g["name"]
 
         try:
-            status, text = mark_guild_read(token, guild_id)
-            if status in (200, 204):
+            channels = get_guild_channels(token, guild_id)
+            unread_channels = []
+
+            for c in channels:
+                if c.get("type") in (0, 5) and c.get(
+                    "last_message_id"
+                ):  # Text channels and news channels
+                    channel_id = c["id"]
+                    last_msg = c["last_message_id"]
+                    # If the channel is unread (not in read states, or read state is older than last msg)
+                    if read_states_cache.get(channel_id) != last_msg:
+                        unread_channels.append((channel_id, last_msg))
+
+            if not unread_channels:
+                print(f"  ✓  Already Read: {name} (Skipping API call)")
+                success += 1
+                continue
+
+            print(
+                f"  >  Processing {name}: {len(unread_channels)} unread channel(s)..."
+            )
+            guild_success = True
+
+            for channel_id, last_msg in unread_channels:
+                status, text = mark_channel_read(token, channel_id, last_msg)
+                if status not in (200, 204):
+                    print(f"     ✗ Channel Failed (HTTP {status} - {text})")
+                    guild_success = False
+                    if "Cloudflare IP Ban" in text:
+                        print(
+                            "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
+                        )
+                        return
+                time.sleep(REQUEST_DELAY / 2)  # Faster pacing for individual channels
+
+            if guild_success:
                 print(f"  ✓  Marked Read: {name}")
                 success += 1
             else:
-                print(f"  ✗  Failed:      {name}  (HTTP {status} - {text})")
                 failed += 1
-                if "Cloudflare IP Ban" in text:
-                    print(
-                        "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
-                    )
-                    break
+
         except Exception as e:
             print(f"  ✗  Failed:      {name}  (Error: {e})")
             failed += 1
