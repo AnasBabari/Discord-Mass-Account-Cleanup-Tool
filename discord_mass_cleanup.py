@@ -48,6 +48,22 @@ def _make_api_request(
 # ── API helpers (Servers) ─────────────────────────────────────────────────────
 
 
+def get_clean_error(r: requests.Response) -> str:
+    """Helper to extract a clean error message, avoiding huge HTML dumps."""
+    text = r.text
+    if "<html" in text.lower():
+        if "1015" in text:
+            return "Cloudflare IP Ban (Error 1015)"
+        return "HTML Error Response (Likely Cloudflare block)"
+    try:
+        data = r.json()
+        if "message" in data:
+            return data["message"]
+    except ValueError:
+        pass
+    return text[:100] + "..." if len(text) > 100 else text
+
+
 def get_guilds(token: str) -> list[dict]:
     """Fetch all guilds the user is in (handles pagination)."""
     guilds = []
@@ -75,9 +91,9 @@ def get_guilds(token: str) -> list[dict]:
 
 
 def leave_guild(token: str, guild_id: str) -> tuple[int, str]:
-    """Leave a single guild. Returns final HTTP status code and text response."""
+    """Leave a guild."""
     r = _make_api_request("DELETE", f"/users/@me/guilds/{guild_id}", token)
-    return r.status_code, r.text
+    return r.status_code, get_clean_error(r)
 
 
 # ── API helpers (Friends) ─────────────────────────────────────────────────────
@@ -99,9 +115,9 @@ def get_friends(token: str) -> list[dict]:
 
 
 def remove_friend(token: str, user_id: str) -> tuple[int, str]:
-    """Remove a single friend. Returns final HTTP status code and text response."""
+    """Remove a friend by user ID."""
     r = _make_api_request("DELETE", f"/users/@me/relationships/{user_id}", token)
-    return r.status_code, r.text
+    return r.status_code, get_clean_error(r)
 
 
 # ── API helpers (Read States) ─────────────────────────────────────────────────
@@ -118,18 +134,17 @@ def get_dms(token: str) -> list[dict]:
 
 
 def mark_channel_read(token: str, channel_id: str, message_id: str) -> tuple[int, str]:
-    """Acknowledge a channel up to the given message_id."""
-    payload = {"token": None}
+    """Acknowledge a channel up to a specific message ID."""
     r = _make_api_request(
-        "POST", f"/channels/{channel_id}/messages/{message_id}/ack", token, json=payload
+        "POST", f"/channels/{channel_id}/messages/{message_id}/ack", token, json={}
     )
-    return r.status_code, r.text
+    return r.status_code, get_clean_error(r)
 
 
 def mark_guild_read(token: str, guild_id: str) -> tuple[int, str]:
     """Acknowledge all messages in a guild."""
     r = _make_api_request("POST", f"/guilds/{guild_id}/ack", token, json={})
-    return r.status_code, r.text
+    return r.status_code, get_clean_error(r)
 
 
 def check_token(token: str) -> bool:
@@ -268,6 +283,11 @@ def mass_leave_servers(token: str) -> None:
             else:
                 print(f"  ✗  Failed: {g['name']}  (HTTP {status} - {text})")
                 failed += 1
+                if "Cloudflare IP Ban" in text:
+                    print(
+                        "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
+                    )
+                    break
         except Exception as e:
             print(f"  ✗  Failed: {g['name']}  (Error: {e})")
             failed += 1
@@ -354,6 +374,11 @@ def mass_remove_friends(token: str) -> None:
             else:
                 print(f"  ✗  Failed:  {display}  (HTTP {status} - {text})")
                 failed += 1
+                if "Cloudflare IP Ban" in text:
+                    print(
+                        "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
+                    )
+                    break
         except Exception as e:
             print(f"  ✗  Failed:  {display}  (Error: {e})")
             failed += 1
@@ -417,6 +442,11 @@ def mass_mark_read(token: str) -> None:
             else:
                 print(f"  ✗  Failed:      {name}  (HTTP {status} - {text})")
                 failed += 1
+                if "Cloudflare IP Ban" in text:
+                    print(
+                        "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
+                    )
+                    break
         except Exception as e:
             print(f"  ✗  Failed:      {name}  (Error: {e})")
             failed += 1
@@ -465,6 +495,11 @@ def mass_mark_guilds_read(token: str) -> None:
             else:
                 print(f"  ✗  Failed:      {name}  (HTTP {status} - {text})")
                 failed += 1
+                if "Cloudflare IP Ban" in text:
+                    print(
+                        "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
+                    )
+                    break
         except Exception as e:
             print(f"  ✗  Failed:      {name}  (Error: {e})")
             failed += 1
