@@ -13,7 +13,7 @@ Usage:
 import requests
 import time
 import os
-import getpass
+import pwinput
 from dotenv import load_dotenv
 
 BASE_URL = "https://discord.com/api/v10"
@@ -435,8 +435,7 @@ def main() -> None:
         print("  4. Press Ctrl+Shift+M (or Cmd+Shift+M) to toggle Mobile View.")
         print("  5. Type 'token' in the filter box and copy the value without quotes.")
         print("───────────────────────────────────────────────────────────\n")
-        token = getpass.getpass("Paste token: ").strip()
-
+        token = pwinput.pwinput("Paste token: ", mask="*").strip()
     if not token:
         print("No token entered. Exiting.")
         return
