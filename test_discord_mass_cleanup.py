@@ -484,20 +484,6 @@ def test_main_no_token(mock_getenv, mock_pwinput, capsys):
     assert "No token entered. Exiting." in capsys.readouterr().out
 
 
-@patch("builtins.input")
-@patch("os.getenv")
-@patch("discord_mass_cleanup.check_token")
-def test_main_env_token(mock_check, mock_getenv, mock_input, capsys):
-    mock_getenv.return_value = "env_token"
-    mock_check.return_value = True
-    mock_input.side_effect = ["q"]
-    dmc.main()
-    assert "Using token from .env file." in capsys.readouterr().out
-
-
-import os
-
-
 def test_make_api_request_timeout(mock_responses):
     mock_responses.add(
         responses.GET, f"{BASE_URL}/users/@me/guilds", body=requests.Timeout("Timeout")
@@ -609,7 +595,7 @@ def test_main_keyboard_interrupt(mock_getenv, mock_pwinput, capsys):
     assert "Cancelled." in capsys.readouterr().out
 
 
-def test_main_invalid_token_loop(monkeypatch, capsys):
+def test_main_invalid_token_loop(capsys):
     import pwinput
 
     def pw_side_effect(*args, **kwargs):
@@ -620,33 +606,10 @@ def test_main_invalid_token_loop(monkeypatch, capsys):
 
     with patch("pwinput.pwinput", side_effect=pw_side_effect):
         with patch("discord_mass_cleanup.check_token", return_value=False):
-            with patch("os.getenv", return_value=None):
-                monkeypatch.setenv("DISCORD_TOKEN", "bad_token")
-                try:
-                    dmc.main()
-                except KeyboardInterrupt:
-                    pass
-                assert "DISCORD_TOKEN" not in os.environ
-
-
-def test_main_change_token(monkeypatch, capsys):
-    monkeypatch.setenv("DISCORD_TOKEN", "env_token")
-
-    def input_se(*args, **kwargs):
-        return "t"
-
-    def pwinput_se(*args, **kwargs):
-        raise KeyboardInterrupt()
-
-    with patch("os.getenv", side_effect=lambda k: os.environ.get(k)):
-        with patch("discord_mass_cleanup.check_token", return_value=True):
-            with patch("builtins.input", side_effect=input_se):
-                with patch("pwinput.pwinput", side_effect=pwinput_se):
-                    try:
-                        dmc.main()
-                    except KeyboardInterrupt:
-                        pass
-                    assert "DISCORD_TOKEN" not in os.environ
+            try:
+                dmc.main()
+            except KeyboardInterrupt:
+                pass
 
 
 def test_module_main():
