@@ -675,11 +675,11 @@ def test_mass_read_notifications_success(mock_api, mock_get_states, mock_in, cap
 
 
 @patch("builtins.input", return_value="no")
-@patch("discord_mass_cleanup._get_read_states")
+@patch("discord_mass_cleanup._get_read_states", return_value=["1", "2"])
 def test_mass_read_notifications_cancel(mock_get_states, mock_in, capsys):
     dmc.mass_read_notifications("token")
     assert "Cancelled." in capsys.readouterr().out
-    mock_get_states.assert_not_called()
+    mock_get_states.assert_called_once()
 
 
 @patch("builtins.input", return_value="yes")

@@ -61,6 +61,7 @@ def _make_api_request(
                 retries += 1
                 time.sleep(2)
                 continue
+            raise
 
         if r.status_code == 429:
             if "<html" in r.text.lower() and "1015" in r.text:
@@ -165,17 +166,18 @@ def remove_friend(token: str, user_id: str) -> tuple[int, str]:
 def _get_read_states(token: str) -> list[str]:
     """Connects to the Discord WS to extract all channel IDs from read_state, guilds, and private_channels."""
     channel_ids = set()
-    has_received_ready = [False]  # use list to mutate in nested function
+    has_received_ready = False
     print("  [WS] Connecting to Discord Gateway to fetch your read states...")
 
     def on_message(ws, message):
+        nonlocal has_received_ready
         try:
             data = json.loads(message)
             if data.get("op") == 9:
                 print("  [WS] Invalid session! Token might be bad or WS blocked.")
                 ws.close()
             elif data.get("t") == "READY":
-                has_received_ready[0] = True
+                has_received_ready = True
                 d = data.get("d")
                 if isinstance(d, dict):
                     # 1. Grab read state entries
@@ -217,7 +219,7 @@ def _get_read_states(token: str) -> list[str]:
             "op": 2,
             "d": {
                 "token": token,
-                "capabilities": 16381,
+                "capabilities": 16381,  # Discord's internal client capabilities bitfield (may need updating if READY stops arriving)
                 "properties": {
                     "os": "Windows",
                     "browser": "Chrome",
@@ -236,6 +238,7 @@ def _get_read_states(token: str) -> list[str]:
         ws.send(json.dumps(payload))
 
     def on_error(ws, error):
+        print(f"  [WS] Error: {error}")
         try:
             ws.close()
         except Exception:
@@ -260,7 +263,7 @@ def _get_read_states(token: str) -> list[str]:
         wst.join()
         raise RuntimeError("WebSocket connection timed out.")
 
-    if not has_received_ready[0]:
+    if not has_received_ready:
         raise RuntimeError("Failed to receive READY payload from WebSocket. Connection aborted or failed.")
 
     return list(channel_ids)
@@ -510,12 +513,6 @@ def mass_remove_friends(token: str) -> None:
 def mass_read_notifications(token: str) -> None:
     print("\nFetching your unread notifications…")
     
-    confirm = input("Type 'yes' to mark ALL DMs and Servers as read: ").strip()
-    if confirm.lower() != "yes":
-        print("Cancelled.")
-        return
-
-    print()
     try:
         channel_ids = _get_read_states(token)
     except RuntimeError as e:
@@ -527,6 +524,11 @@ def mass_read_notifications(token: str) -> None:
         return
         
     print(f"\nFound {len(channel_ids)} channel(s) to process.")
+    
+    confirm = input("Type 'yes' to mark ALL DMs and Servers as read: ").strip()
+    if confirm.lower() != "yes":
+        print("Cancelled.")
+        return
     
     # Generate a Snowflake for the current time + 1 hour to ensure it's in the future
     # Discord epoch is 1420070400000
