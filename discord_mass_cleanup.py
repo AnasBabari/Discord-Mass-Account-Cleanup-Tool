@@ -160,25 +160,62 @@ def remove_friend(token: str, user_id: str) -> tuple[int, str]:
 # ── API helpers (Read States) ─────────────────────────────────────────────────
 
 
-def get_dms(token: str) -> list[dict]:
-    """Fetch all direct message channels (DMs and Group DMs)."""
-    r = _make_api_request("GET", "/users/@me/channels", token)
+import websocket
 
-    if r.status_code == 401:
-        raise ValueError("\n✗  Invalid token — please double-check and try again.")
-    r.raise_for_status()
-    return r.json()
+def _get_read_states(token: str) -> list[str]:
+    """Connects to the Discord WS to extract all channel IDs from read_state."""
+    channel_ids = []
+    print("  [WS] Connecting to Discord Gateway to fetch your read states...")
 
+    def on_message(ws, message):
+        data = json.loads(message)
+        if data.get("op") == 9:
+            print("  [WS] Invalid session! Token might be bad or WS blocked.")
+            ws.close()
+        elif data.get("t") == "READY":
+            d = data.get("d", {})
+            if "read_state" in d and "entries" in d["read_state"]:
+                for entry in d["read_state"]["entries"]:
+                    if entry.get("id"):
+                        channel_ids.append(entry.get("id"))
+            print("  [WS] Successfully downloaded read states.")
+            ws.close()
 
-def mark_channel_read(token: str, channel_id: str, message_id: str) -> tuple[int, str]:
-    """Marks a single channel (or DM) as read up to message_id."""
-    r = _make_api_request(
-        "POST",
-        f"/channels/{channel_id}/messages/{message_id}/ack",
-        token,
-        json={"token": None},
+    def on_open(ws):
+        payload = {
+            "op": 2,
+            "d": {
+                "token": token,
+                "capabilities": 16381,
+                "properties": {
+                    "os": "Windows",
+                    "browser": "Chrome",
+                    "device": "",
+                },
+                "presence": {
+                    "status": "unknown",
+                    "since": 0,
+                    "activities": [],
+                    "afk": False,
+                },
+                "compress": False,
+                "client_state": {"guild_versions": {}},
+            },
+        }
+        ws.send(json.dumps(payload))
+
+    def on_error(ws, error):
+        pass  # Ignore minor ws errors to prevent crash dumps
+
+    ws = websocket.WebSocketApp(
+        "wss://gateway.discord.gg/?v=9&encoding=json",
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
     )
-    return r.status_code, get_clean_error(r)
+    ws.run_forever()
+    return channel_ids
+
 
 def check_token(token: str) -> bool:
     """Verifies if the provided token is valid."""
@@ -421,72 +458,55 @@ def mass_remove_friends(token: str) -> None:
     print(f"\nDone — removed {success}, failed {failed}.")
 
 
-def mass_mark_read(token: str) -> None:
-    print("\nFetching your DM channels…")
-    try:
-        channels = get_dms(token)
-    except ValueError as e:
-        print(e)
-        return
-    except NetworkError as e:
-        print(f"\n✗  Network/API error fetching DMs: {e}")
-        return
-    except RuntimeError as e:
-        print(f"\n✗  Runtime error: {e}")
-        return
-
-    if not channels:
-        print("No DM channels found.")
-        return
-
-    valid_channels = [c for c in channels if c.get("last_message_id")]
-
-    print(f"\nFound {len(valid_channels)} DM(s) to process.\n")
-
-    confirm = input("Type 'yes' to mark all these DMs as read: ").strip()
+def mass_read_notifications(token: str) -> None:
+    print("\nFetching your unread notifications…")
+    
+    confirm = input("Type 'yes' to mark ALL DMs and Servers as read: ").strip()
     if confirm.lower() != "yes":
         print("Cancelled.")
         return
 
     print()
-    success = failed = 0
-    for c in valid_channels:
-        channel_id = c["id"]
-        message_id = c["last_message_id"]
+    channel_ids = _get_read_states(token)
+    if not channel_ids:
+        print("No channels found to mark as read.")
+        return
+        
+    print(f"\nFound {len(channel_ids)} channel(s) to process.")
+    print("  >  Sending bulk acknowledgment...")
 
-        name = "Unknown DM"
-        if c.get("name"):
-            name = c["name"]
-        elif c.get("recipients") and len(c["recipients"]) > 0:
-            if len(c["recipients"]) == 1:
-                name = (
-                    c["recipients"][0].get("global_name")
-                    or c["recipients"][0].get("username")
-                    or "User"
-                )
-            else:
-                name = "Group Chat"
+    # Generate a Snowflake for the current time + 1 hour to ensure it's in the future
+    # Discord epoch is 1420070400000
+    current_time_ms = int(time.time() * 1000)
+    future_ms = current_time_ms + 3600000
+    massive_message_id = str((future_ms - 1420070400000) << 22)
 
-        try:
-            status, text = mark_channel_read(token, channel_id, message_id)
-            if status in (200, 204):
-                print(f"  ✓  Marked Read: {name}")
-                success += 1
-            else:
-                print(f"  ✗  Failed:      {name}  (HTTP {status} - {text})")
-                failed += 1
-                if "Cloudflare IP Ban" in text:
-                    print(
-                        "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
-                    )
-                    break
-        except Exception as e:
-            print(f"  ✗  Failed:      {name}  (Error: {e})")
-            failed += 1
+    read_states_payload = []
+    for c_id in channel_ids:
+        read_states_payload.append({
+            "channel_id": c_id,
+            "message_id": massive_message_id,
+            "read_state_type": 0
+        })
 
-        time.sleep(REQUEST_DELAY)
+    payload = {"read_states": read_states_payload}
 
-    print(f"\nDone — marked read {success}, failed {failed}.")
+    try:
+        r = _make_api_request("POST", "/read-states/ack-bulk", token, json=payload)
+        
+        if r.status_code in (200, 204):
+            print(f"  ✓  Success! All notifications have been marked as read.")
+        else:
+            print(f"  ✗  Failed (HTTP {r.status_code} - {get_clean_error(r)})")
+            if "Cloudflare IP Ban" in r.text:
+                print("\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
+    except NetworkError as e:
+        print(f"  ✗  Network error: {e}")
+    except Exception as e:
+        print(f"  ✗  Failed: {e}")
+
+    print("\nDone.")
+
 
 def main() -> None:
     print("\n╔══════════════════════════════════════════╗")
@@ -535,7 +555,7 @@ def main() -> None:
             print("\nMain Menu:")
             print("  [1] Mass Leave Servers")
             print("  [2] Mass Remove Friends")
-            print("  [3] Mass Mark DMs as Read")
+            print("  [3] Mass Read Notifications")
             print("  [t] Change Token / Switch Account")
             print("  [q] Quit\n")
 
@@ -546,7 +566,7 @@ def main() -> None:
             elif choice == "2":
                 mass_remove_friends(token)
             elif choice == "3":
-                mass_mark_read(token)
+                mass_read_notifications(token)
             elif choice == "t":
                 if "DISCORD_TOKEN" in os.environ:
                     del os.environ["DISCORD_TOKEN"]
@@ -556,7 +576,7 @@ def main() -> None:
                 print("Exiting...")
                 return
             else:
-                print("Invalid choice. Please select 1, 2, 3, 4, t, or q.")
+                print("Invalid choice. Please select 1, 2, 3, t, or q.")
 
 
 if __name__ == "__main__":
