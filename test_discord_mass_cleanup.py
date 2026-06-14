@@ -444,7 +444,6 @@ def test_mass_remove_friends_empty_selection(mock_get_friends, mock_input, capsy
 
 @patch("builtins.input")
 @patch("discord_mass_cleanup.get_masked_input")
-@patch("os.getenv")
 @patch("discord_mass_cleanup.check_token")
 @patch("discord_mass_cleanup.mass_leave_servers")
 @patch("discord_mass_cleanup.mass_remove_friends")
@@ -454,12 +453,10 @@ def test_main_menu(
     mock_remove,
     mock_leave,
     mock_check,
-    mock_getenv,
     mock_get_masked_input,
     mock_input,
     capsys,
 ):
-    mock_getenv.return_value = None
     mock_get_masked_input.return_value = "my_token"
     mock_check.return_value = True
     # choice 1, 2, 3, 4, invalid choice, q
@@ -476,9 +473,7 @@ def test_main_menu(
 
 
 @patch("discord_mass_cleanup.get_masked_input")
-@patch("os.getenv")
-def test_main_no_token(mock_getenv, mock_get_masked_input, capsys):
-    mock_getenv.return_value = None
+def test_main_no_token(mock_get_masked_input, capsys):
     mock_get_masked_input.return_value = ""
     dmc.main()
     assert "No token entered. Exiting." in capsys.readouterr().out
@@ -589,8 +584,7 @@ def test_mass_remove_friends_exception(mock_rm, mock_get, mock_in, capsys):
 
 
 @patch("discord_mass_cleanup.get_masked_input", side_effect=KeyboardInterrupt)
-@patch("os.getenv", return_value=None)
-def test_main_keyboard_interrupt(mock_getenv, mock_get_masked_input, capsys):
+def test_main_keyboard_interrupt(mock_get_masked_input, capsys):
     dmc.main()
     assert "Cancelled." in capsys.readouterr().out
 
@@ -637,7 +631,16 @@ def test_get_read_states(mock_ws):
                     "d": {
                         "read_state": {
                             "entries": [{"id": "ch1", "last_message_id": "msg1"}]
-                        }
+                        },
+                        "guilds": [
+                            {
+                                "channels": [{"id": "ch2"}, {"id": "ch3"}],
+                                "threads": [{"id": "th1"}]
+                            }
+                        ],
+                        "private_channels": [
+                            {"id": "pc1"}
+                        ]
                     },
                 }
             ),
@@ -648,7 +651,7 @@ def test_get_read_states(mock_ws):
     mock_ws.side_effect = side_effect
 
     res = dmc._get_read_states("token")
-    assert res == ["ch1"]
+    assert set(res) == {"ch1", "ch2", "ch3", "th1", "pc1"}
     assert ws_instance.send.called
     assert ws_instance.run_forever.called
 
