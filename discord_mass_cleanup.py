@@ -163,8 +163,8 @@ def remove_friend(token: str, user_id: str) -> tuple[int, str]:
 
 
 def _get_read_states(token: str) -> list[str]:
-    """Connects to the Discord WS to extract all channel IDs from read_state."""
-    channel_ids = []
+    """Connects to the Discord WS to extract all channel IDs from read_state, guilds, and private_channels."""
+    channel_ids = set()
     has_received_ready = [False]  # use list to mutate in nested function
     print("  [WS] Connecting to Discord Gateway to fetch your read states...")
 
@@ -178,14 +178,38 @@ def _get_read_states(token: str) -> list[str]:
                 has_received_ready[0] = True
                 d = data.get("d")
                 if isinstance(d, dict):
+                    # 1. Grab read state entries
                     read_state = d.get("read_state")
                     if isinstance(read_state, dict) and "entries" in read_state:
                         for entry in read_state["entries"]:
                             if isinstance(entry, dict) and entry.get("id"):
-                                channel_ids.append(entry.get("id"))
-                print("  [WS] Successfully downloaded read states.")
+                                channel_ids.add(entry.get("id"))
+                    
+                    # 2. Grab all channels and threads from guilds
+                    guilds = d.get("guilds", [])
+                    if isinstance(guilds, list):
+                        for guild in guilds:
+                            if isinstance(guild, dict):
+                                if "channels" in guild and isinstance(guild["channels"], list):
+                                    for channel in guild["channels"]:
+                                        if isinstance(channel, dict) and channel.get("id"):
+                                            channel_ids.add(channel.get("id"))
+                                if "threads" in guild and isinstance(guild["threads"], list):
+                                    for thread in guild["threads"]:
+                                        if isinstance(thread, dict) and thread.get("id"):
+                                            channel_ids.add(thread.get("id"))
+                                            
+                    # 3. Grab all private channels
+                    private_channels = d.get("private_channels", [])
+                    if isinstance(private_channels, list):
+                        for pc in private_channels:
+                            if isinstance(pc, dict) and pc.get("id"):
+                                channel_ids.add(pc.get("id"))
+                                
+                print("  [WS] Successfully downloaded read states and channel lists.")
                 ws.close()
-        except Exception:
+        except Exception as e:
+            print(f"  [WS] Exception in on_message: {e}")
             ws.close()
 
     def on_open(ws):
@@ -239,7 +263,7 @@ def _get_read_states(token: str) -> list[str]:
     if not has_received_ready[0]:
         raise RuntimeError("Failed to receive READY payload from WebSocket. Connection aborted or failed.")
 
-    return channel_ids
+    return list(channel_ids)
 
 
 def check_token(token: str) -> bool:
