@@ -25,11 +25,6 @@ python discord_mass_cleanup.py
 
 Follow the on-screen instructions. You will be prompted to paste your user token securely and then choose which cleanup operation you want to perform.
 
-Alternatively, if you plan to run the script multiple times, you can use the provided `.env.example` file. Simply copy it, rename the copy to `.env`, and paste your token in:
-
-```env
-DISCORD_TOKEN=your_token_here
-```
 
 ## How to get your Discord User Token
 

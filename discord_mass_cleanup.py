@@ -624,20 +624,17 @@ def main() -> None:
     print("   a one-off cleanup, but use at your own discretion.\n")
 
     while True:
-        token = ""
-
-        if not token:
-            print("── How to get your token ──────────────────────────────────")
-            print("  1. Open https://discord.com in your browser and log in.")
-            print("  2. Press F12 to open Developer Tools.")
-            print("  3. Go to Application tab → Local Storage → https://discord.com")
-            print("  4. Press Ctrl+Shift+M (or Cmd+Shift+M) to toggle Mobile View.")
-            print(
-                "  5. Type 'token' in the filter box and copy the value without quotes."
-            )
-            print("───────────────────────────────────────────────────────────\n")
-            try:
-                token = get_masked_input("Paste token: ", mask="*").strip()
+        print("── How to get your token ──────────────────────────────────")
+        print("  1. Open https://discord.com in your browser and log in.")
+        print("  2. Press F12 to open Developer Tools.")
+        print("  3. Go to Application tab → Local Storage → https://discord.com")
+        print("  4. Press Ctrl+Shift+M (or Cmd+Shift+M) to toggle Mobile View.")
+        print(
+            "  5. Type 'token' in the filter box and copy the value without quotes."
+        )
+        print("───────────────────────────────────────────────────────────\n")
+        try:
+            token = get_masked_input("Paste token: ", mask="*").strip()
             except (KeyboardInterrupt, EOFError):
                 print("\nCancelled.")
                 return
