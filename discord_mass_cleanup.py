@@ -4,7 +4,7 @@ Discord Mass Account Cleanup Tool
 Lets you mass leave servers and mass remove friends.
 
 Requirements:
-    pip install requests pwinput websocket-client
+    pip install requests websocket-client
 
 Usage:
     python discord_mass_cleanup.py
@@ -14,7 +14,6 @@ import json
 import os
 import time
 
-import pwinput
 import sys
 import threading
 import websocket
@@ -583,6 +582,37 @@ def mass_read_notifications(token: str) -> None:
         print(f"Done — marked read {success_count}, failed {fail_count}.")
 
 
+def get_masked_input(prompt: str = "Paste token: ", mask: str = "*") -> str:
+    """A cross-platform masked input that correctly handles Ctrl+C."""
+    import sys
+    if sys.platform == "win32":
+        import msvcrt
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        entered = []
+        while True:
+            # getwch() handles Unicode characters properly on Windows
+            key = ord(msvcrt.getwch())
+            if key == 13:  # Enter
+                sys.stdout.write("\n")
+                return "".join(entered)
+            elif key == 3:  # Ctrl+C
+                raise KeyboardInterrupt()
+            elif key in (8, 127):  # Backspace
+                if len(entered) > 0:
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                    entered.pop()
+            elif 0 <= key <= 31:
+                pass
+            else:
+                sys.stdout.write(mask)
+                sys.stdout.flush()
+                entered.append(chr(key))
+    else:
+        import getpass
+        return getpass.getpass(prompt)
+
 def main() -> None:
     print("\n╔══════════════════════════════════════════╗")
     print("║   Discord Mass Account Cleanup Tool      ║")
@@ -605,7 +635,7 @@ def main() -> None:
             )
             print("───────────────────────────────────────────────────────────\n")
             try:
-                token = pwinput.pwinput("Paste token: ", mask="*").strip()
+                token = get_masked_input("Paste token: ", mask="*").strip()
             except (KeyboardInterrupt, EOFError):
                 print("\nCancelled.")
                 return
