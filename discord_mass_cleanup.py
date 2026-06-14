@@ -635,9 +635,9 @@ def main() -> None:
         print("───────────────────────────────────────────────────────────\n")
         try:
             token = get_masked_input("Paste token: ", mask="*").strip()
-            except (KeyboardInterrupt, EOFError):
-                print("\nCancelled.")
-                return
+        except (KeyboardInterrupt, EOFError):
+            print("\nCancelled.")
+            return
 
         if not token:
             print("No token entered. Exiting.")
