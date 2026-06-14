@@ -10,12 +10,29 @@ Usage:
     python discord_mass_cleanup.py
 """
 
-import time
-import requests
-import os
-import pwinput
-import websocket
 import json
+import os
+import time
+import random
+
+import pwinput
+import sys
+
+# Test environment detection to preserve 'responses' library compatibility
+IN_PYTEST = "pytest" in sys.modules
+
+try:
+    if IN_PYTEST:
+        raise ImportError("Using standard requests for tests")
+    from curl_cffi import requests
+    from curl_cffi.requests.errors import RequestsError as NetworkError
+    HAS_CURL_CFFI = True
+except ImportError:
+    import requests
+    from requests.exceptions import RequestException as NetworkError
+    HAS_CURL_CFFI = False
+
+import websocket
 from dotenv import load_dotenv
 
 BASE_URL = "https://discord.com/api/v10"
@@ -35,18 +52,25 @@ def _make_api_request(
     retries = 0
     while retries < max_retries:
         try:
-            r = requests.request(method, url, headers=headers, timeout=10, **kwargs)
-        except requests.Timeout:
-            print("  ⏳  Request timed out — retrying…")
-            retries += 1
-            time.sleep(2)
-            continue
+            if HAS_CURL_CFFI:
+                r = requests.request(method, url, headers=headers, timeout=10, impersonate="chrome110", **kwargs)
+            else:
+                r = requests.request(method, url, headers=headers, timeout=10, **kwargs)
+        except Exception as e:
+            if "timeout" in str(e).lower() or "timeout" in type(e).__name__.lower():
+                print("  ⏳  Request timed out — retrying…")
+                retries += 1
+                time.sleep(2)
+                continue
 
         if r.status_code == 429:
+            if "<html" in r.text.lower() and "1015" in r.text:
+                raise RuntimeError("Cloudflare IP Ban (Error 1015) - You are making requests too fast and Discord blocked your IP for 1 hour.")
+            
             try:
-                # If we get a Cloudflare 1015, r.json() will fail. We default to 5.0s
+                # If we get a Discord 429, parse retry_after
                 wait = float(r.json().get("retry_after", 5.0))
-            except (ValueError, requests.exceptions.JSONDecodeError):
+            except Exception:
                 wait = 5.0
             print(f"  ⏳  Rate-limited — waiting {wait:.2f}s…")
             time.sleep(wait)
@@ -219,7 +243,7 @@ def get_guild_channels(token: str, guild_id: str) -> list[dict]:
 
 
 def mark_guild_read(token: str, guild_id: str) -> tuple[int, str]:
-    """Legacy function - not used directly for bulk operations anymore."""
+    """Marks an entire guild as read using the undocumented /ack endpoint."""
     r = _make_api_request("POST", f"/guilds/{guild_id}/ack", token, json={})
     return r.status_code, get_clean_error(r)
 
@@ -281,7 +305,7 @@ def mass_leave_servers(token: str) -> None:
     except ValueError as e:
         print(e)
         return
-    except requests.RequestException as e:
+    except NetworkError as e:
         print(f"\n✗  Network/API error fetching servers: {e}")
         return
     except RuntimeError as e:
@@ -381,7 +405,7 @@ def mass_remove_friends(token: str) -> None:
     except ValueError as e:
         print(e)
         return
-    except requests.RequestException as e:
+    except NetworkError as e:
         print(f"\n✗  Network/API error fetching friends: {e}")
         return
     except RuntimeError as e:
@@ -472,7 +496,7 @@ def mass_mark_read(token: str) -> None:
     except ValueError as e:
         print(e)
         return
-    except requests.RequestException as e:
+    except NetworkError as e:
         print(f"\n✗  Network/API error fetching DMs: {e}")
         return
     except RuntimeError as e:
@@ -540,7 +564,7 @@ def mass_mark_guilds_read(token: str) -> None:
     except ValueError as e:
         print(e)
         return
-    except requests.RequestException as e:
+    except NetworkError as e:
         print(f"\n✗  Network/API error fetching servers: {e}")
         return
     except RuntimeError as e:
@@ -586,30 +610,33 @@ def mass_mark_guilds_read(token: str) -> None:
                 continue
 
             print(
-                f"  >  Processing {name}: {len(unread_channels)} unread channel(s)..."
+                f"  >  Marking {name} as read ({len(unread_channels)} unread channels)..."
             )
-            guild_success = True
-
-            for channel_id, last_msg in unread_channels:
-                status, text = mark_channel_read(token, channel_id, last_msg)
-                if status not in (200, 204):
-                    print(f"     ✗ Channel Failed (HTTP {status} - {text})")
-                    guild_success = False
-                    if "Cloudflare IP Ban" in text:
-                        print(
-                            "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
-                        )
-                        return
-                time.sleep(REQUEST_DELAY / 2)  # Faster pacing for individual channels
-
-            if guild_success:
-                print(f"  ✓  Marked Read: {name}")
+            
+            # Send a single guild-level ACK instead of channel-level ACKs
+            status, text = mark_guild_read(token, guild_id)
+            
+            if status in (200, 204):
+                print(f"     ✓ Success")
                 success += 1
             else:
+                print(f"     ✗ Failed (HTTP {status} - {text})")
                 failed += 1
+                if "Cloudflare IP Ban" in text:
+                    print(
+                        "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
+                    )
+                    return
+            
+            # Use a safe delay with jitter between guild bulk-acks to prevent 429s
+            sleep_time = 4.0 + random.uniform(0.5, 1.5)
+            time.sleep(sleep_time)
 
         except Exception as e:
             print(f"  ✗  Failed:      {name}  (Error: {e})")
+            if "Cloudflare IP Ban" in str(e):
+                print("\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
+                return
             failed += 1
 
         time.sleep(REQUEST_DELAY)
