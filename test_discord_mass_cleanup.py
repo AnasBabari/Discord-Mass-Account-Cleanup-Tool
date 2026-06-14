@@ -545,9 +545,7 @@ def test_mass_mark_read_req_error(mock_get_dms, capsys):
 @patch("discord_mass_cleanup.mass_leave_servers")
 @patch("discord_mass_cleanup.mass_remove_friends")
 @patch("discord_mass_cleanup.mass_mark_read")
-@patch("discord_mass_cleanup.mass_mark_guilds_read")
 def test_main_menu(
-    mock_mark_guilds,
     mock_mark,
     mock_remove,
     mock_leave,
@@ -561,14 +559,13 @@ def test_main_menu(
     mock_pwinput.return_value = "my_token"
     mock_check.return_value = True
     # choice 1, 2, 3, 4, invalid choice, q
-    mock_input.side_effect = ["1", "2", "3", "4", "9", "q"]
+    mock_input.side_effect = ["1", "2", "3", "9", "q"]
 
     dmc.main()
 
     mock_leave.assert_called_once_with("my_token")
     mock_remove.assert_called_once_with("my_token")
     mock_mark.assert_called_once_with("my_token")
-    mock_mark_guilds.assert_called_once_with("my_token")
     captured = capsys.readouterr().out
     assert "Invalid choice" in captured
     assert "Exiting..." in captured
@@ -622,52 +619,6 @@ def test_get_clean_error_json():
 
     r.json.side_effect = ValueError("No JSON")
     assert dmc.get_clean_error(r) == '{"message": "API Error"}'
-
-
-@patch("websocket.WebSocketApp")
-def test_get_read_states(mock_ws):
-    ws_instance = MagicMock()
-    mock_ws.return_value = ws_instance
-
-    def side_effect(*args, **kwargs):
-        on_open = kwargs["on_open"]
-        on_message = kwargs["on_message"]
-        on_error = kwargs["on_error"]
-        on_open(ws_instance)
-        on_message(ws_instance, json.dumps({"op": 9}))
-        on_message(
-            ws_instance,
-            json.dumps(
-                {
-                    "t": "READY",
-                    "d": {
-                        "read_state": {
-                            "entries": [{"id": "ch1", "last_message_id": "msg1"}]
-                        }
-                    },
-                }
-            ),
-        )
-        on_error(ws_instance, "some_error")
-        return ws_instance
-
-    mock_ws.side_effect = side_effect
-
-    res = dmc._get_read_states("token")
-    assert res == {"ch1": "msg1"}
-    assert ws_instance.send.called
-    assert ws_instance.run_forever.called
-
-
-def test_get_guild_channels(mock_responses):
-    mock_responses.add(
-        responses.GET,
-        f"{BASE_URL}/guilds/123/channels",
-        json=[{"id": "ch1"}],
-        status=200,
-    )
-    assert dmc.get_guild_channels("token", "123") == [{"id": "ch1"}]
-
 
 
 def test_check_token_success(mock_responses):
@@ -767,101 +718,6 @@ def test_mass_mark_read_cf_ban(mock_mk, mock_get, mock_in, capsys):
 @patch("discord_mass_cleanup.mark_channel_read", side_effect=Exception("GenErr"))
 def test_mass_mark_read_exception(mock_mk, mock_get, mock_in, capsys):
     dmc.mass_mark_read("token")
-    assert "Error: GenErr" in capsys.readouterr().out
-
-
-@patch("discord_mass_cleanup.get_guilds", side_effect=ValueError("ValErr"))
-def test_mass_mark_guilds_read_val_err(mock_get, capsys):
-    dmc.mass_mark_guilds_read("token")
-    assert "ValErr" in capsys.readouterr().out
-
-
-@patch(
-    "discord_mass_cleanup.get_guilds", side_effect=requests.RequestException("ReqErr")
-)
-def test_mass_mark_guilds_read_req_err(mock_get, capsys):
-    dmc.mass_mark_guilds_read("token")
-    assert "ReqErr" in capsys.readouterr().out
-
-
-@patch("discord_mass_cleanup.get_guilds", side_effect=RuntimeError("RunErr"))
-def test_mass_mark_guilds_read_run_err(mock_get, capsys):
-    dmc.mass_mark_guilds_read("token")
-    assert "RunErr" in capsys.readouterr().out
-
-
-@patch("discord_mass_cleanup.get_guilds", return_value=[])
-def test_mass_mark_guilds_read_no_guilds(mock_get, capsys):
-    dmc.mass_mark_guilds_read("token")
-    assert "No servers found." in capsys.readouterr().out
-
-
-@patch(
-    "discord_mass_cleanup.get_guilds", return_value=[{"id": "g1", "name": "Guild 1"}]
-)
-@patch("builtins.input", return_value="no")
-def test_mass_mark_guilds_read_cancel(mock_in, mock_get, capsys):
-    dmc.mass_mark_guilds_read("token")
-    assert "Cancelled." in capsys.readouterr().out
-
-
-@patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup.get_guilds")
-@patch("discord_mass_cleanup._get_read_states")
-@patch("discord_mass_cleanup.get_guild_channels")
-@patch("discord_mass_cleanup.mark_guild_read")
-def test_mass_mark_guilds_read_full(
-    mock_mark, mock_channels, mock_states, mock_guilds, mock_in, capsys
-):
-    mock_guilds.return_value = [
-        {"id": "g1", "name": "Guild 1"},
-        {"id": "g2", "name": "Guild 2"},
-        {"id": "g3", "name": "Guild 3"},
-    ]
-    mock_states.return_value = {"ch1": "msg1", "ch2": "msg2"}
-    mock_channels.side_effect = [
-        [{"id": "ch1", "type": 0, "last_message_id": "msg1"}],
-        [{"id": "ch2", "type": 0, "last_message_id": "msg3"}],
-        [{"id": "ch3", "type": 0, "last_message_id": "msg4"}],
-    ]
-    mock_mark.side_effect = [
-        (204, ""),
-        (400, "Err"),
-    ]
-    dmc.mass_mark_guilds_read("token")
-    out = capsys.readouterr().out
-    assert "Already Read: Guild 1 (Skipping API call)" in out
-    assert "Success" in out
-    assert "Failed" in out
-
-
-@patch("builtins.input", return_value="yes")
-@patch(
-    "discord_mass_cleanup.get_guilds", return_value=[{"id": "g1", "name": "Guild 1"}]
-)
-@patch("discord_mass_cleanup._get_read_states", return_value={})
-@patch(
-    "discord_mass_cleanup.get_guild_channels",
-    return_value=[{"id": "ch1", "type": 0, "last_message_id": "msg1"}],
-)
-@patch(
-    "discord_mass_cleanup.mark_guild_read", return_value=(403, "Cloudflare IP Ban")
-)
-def test_mass_mark_guilds_read_cf_ban(
-    mock_mark, mock_ch, mock_st, mock_g, mock_in, capsys
-):
-    dmc.mass_mark_guilds_read("token")
-    assert "FATAL: Cloudflare has temporarily banned your IP" in capsys.readouterr().out
-
-
-@patch("builtins.input", return_value="yes")
-@patch(
-    "discord_mass_cleanup.get_guilds", return_value=[{"id": "g1", "name": "Guild 1"}]
-)
-@patch("discord_mass_cleanup._get_read_states", return_value={})
-@patch("discord_mass_cleanup.get_guild_channels", side_effect=Exception("GenErr"))
-def test_mass_mark_guilds_read_exception(mock_ch, mock_st, mock_g, mock_in, capsys):
-    dmc.mass_mark_guilds_read("token")
     assert "Error: GenErr" in capsys.readouterr().out
 
 
