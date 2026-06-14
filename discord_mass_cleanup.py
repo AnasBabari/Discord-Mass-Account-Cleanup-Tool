@@ -43,7 +43,7 @@ REQUEST_DELAY = 0.6  # seconds between requests (be polite to the API)
 
 
 def _make_api_request(
-    method: str, endpoint: str, token: str, max_retries: int = 5, **kwargs
+    method: str, endpoint: str, token: str, max_retries: int = 5, quiet: bool = False, **kwargs
 ) -> requests.Response:
     """Helper for Discord API requests with consistent rate-limit and timeout handling."""
     headers = {"Authorization": token}
@@ -58,7 +58,8 @@ def _make_api_request(
                 r = requests.request(method, url, headers=headers, timeout=10, **kwargs)
         except Exception as e:
             if "timeout" in str(e).lower() or "timeout" in type(e).__name__.lower():
-                print("  ⏳  Request timed out — retrying…")
+                if not quiet:
+                    print("  ⏳  Request timed out — retrying…")
                 retries += 1
                 time.sleep(2)
                 continue
@@ -72,7 +73,8 @@ def _make_api_request(
                 wait = float(r.json().get("retry_after", 5.0))
             except Exception:
                 wait = 5.0
-            print(f"  ⏳  Rate-limited — waiting {wait:.2f}s…")
+            if not quiet:
+                print(f"  ⏳  Rate-limited — waiting {wait:.2f}s…")
             time.sleep(wait)
             retries += 1
             continue
@@ -508,7 +510,7 @@ def mass_remove_friends(token: str) -> None:
 
 
 def mass_read_notifications(token: str) -> None:
-    print("\\nFetching your unread notifications…")
+    print("\nFetching your unread notifications…")
     
     confirm = input("Type 'yes' to mark ALL DMs and Servers as read: ").strip()
     if confirm.lower() != "yes":
@@ -519,16 +521,15 @@ def mass_read_notifications(token: str) -> None:
     try:
         channel_ids = _get_read_states(token)
     except RuntimeError as e:
-        print(f"\\n  ✗  {e}")
+        print(f"\n  ✗  {e}")
         return
 
     if not channel_ids:
         print("No channels found to mark as read.")
         return
         
-    print(f"\\nFound {len(channel_ids)} channel(s) to process.")
-    print("  >  Sending bulk acknowledgment...")
-
+    print(f"\nFound {len(channel_ids)} channel(s) to process.")
+    
     # Generate a Snowflake for the current time + 1 hour to ensure it's in the future
     # Discord epoch is 1420070400000
     current_time_ms = int(time.time() * 1000)
@@ -550,18 +551,19 @@ def mass_read_notifications(token: str) -> None:
     success_count = 0
     fail_count = 0
     
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks):
         payload = {"read_states": chunk}
+        print(f"\r  >  Sending bulk acknowledgment... ({i+1}/{len(chunks)} chunks)", end="", flush=True)
         try:
-            r = _make_api_request("POST", "/read-states/ack-bulk", token, json=payload)
+            r = _make_api_request("POST", "/read-states/ack-bulk", token, json=payload, quiet=True)
             if r.status_code in (200, 204):
                 success_count += len(chunk)
             else:
-                print(f"  ✗  Failed chunk (HTTP {r.status_code} - {get_clean_error(r)})")
+                print(f"\n  ✗  Failed chunk (HTTP {r.status_code} - {get_clean_error(r)})")
                 fail_count += len(chunk)
         except RuntimeError as e:
             if "Cloudflare IP Ban" in str(e):
-                print("\\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
+                print("\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
                 return
             print(f"  ✗  Runtime error: {e}")
             fail_count += len(chunk)
@@ -575,10 +577,11 @@ def mass_read_notifications(token: str) -> None:
         if len(chunks) > 1:
             time.sleep(REQUEST_DELAY)
 
+    print()  # newline after progress bar
     if fail_count == 0:
         print(f"  ✓  Success! All {success_count} notifications have been marked as read.")
     else:
-        print(f"\\nDone — marked read {success_count}, failed {fail_count}.")
+        print(f"Done — marked read {success_count}, failed {fail_count}.")
 
 
 def main() -> None:
