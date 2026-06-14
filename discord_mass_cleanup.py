@@ -180,74 +180,6 @@ def mark_channel_read(token: str, channel_id: str, message_id: str) -> tuple[int
     )
     return r.status_code, get_clean_error(r)
 
-
-def _get_read_states(token: str) -> dict:
-    """Connects to the Discord WS to extract read_states for all channels."""
-    read_states = {}
-    print("  [WS] Connecting to Discord Gateway to fetch read states...")
-
-    def on_message(ws, message):
-        data = json.loads(message)
-        if data.get("op") == 9:
-            print("  [WS] Invalid session! Token might be bad or WS blocked.")
-            ws.close()
-        elif data.get("t") == "READY":
-            d = data.get("d", {})
-            if "read_state" in d and "entries" in d["read_state"]:
-                for entry in d["read_state"]["entries"]:
-                    read_states[entry.get("id")] = entry.get("last_message_id")
-            print("  [WS] Successfully downloaded read states.")
-            ws.close()
-
-    def on_open(ws):
-        payload = {
-            "op": 2,
-            "d": {
-                "token": token,
-                "capabilities": 16381,
-                "properties": {
-                    "os": "Windows",
-                    "browser": "Chrome",
-                    "device": "",
-                },
-                "presence": {
-                    "status": "unknown",
-                    "since": 0,
-                    "activities": [],
-                    "afk": False,
-                },
-                "compress": False,
-                "client_state": {"guild_versions": {}},
-            },
-        }
-        ws.send(json.dumps(payload))
-
-    def on_error(ws, error):
-        pass  # Ignore minor ws errors to prevent crash dumps
-
-    ws = websocket.WebSocketApp(
-        "wss://gateway.discord.gg/?v=9&encoding=json",
-        on_open=on_open,
-        on_message=on_message,
-        on_error=on_error,
-    )
-    ws.run_forever()
-    return read_states
-
-
-def get_guild_channels(token: str, guild_id: str) -> list[dict]:
-    """Fetches all channels for a given guild."""
-    r = _make_api_request("GET", f"/guilds/{guild_id}/channels", token)
-    r.raise_for_status()
-    return r.json()
-
-
-def mark_guild_read(token: str, guild_id: str) -> tuple[int, str]:
-    """Marks an entire guild as read using the undocumented /ack endpoint."""
-    r = _make_api_request("POST", f"/guilds/{guild_id}/ack", token, json={})
-    return r.status_code, get_clean_error(r)
-
-
 def check_token(token: str) -> bool:
     """Verifies if the provided token is valid."""
     print("Verifying token...")
@@ -556,94 +488,6 @@ def mass_mark_read(token: str) -> None:
 
     print(f"\nDone — marked read {success}, failed {failed}.")
 
-
-def mass_mark_guilds_read(token: str) -> None:
-    print("\nFetching your servers…")
-    try:
-        all_guilds = get_guilds(token)
-    except ValueError as e:
-        print(e)
-        return
-    except NetworkError as e:
-        print(f"\n✗  Network/API error fetching servers: {e}")
-        return
-    except RuntimeError as e:
-        print(f"\n✗  Runtime error: {e}")
-        return
-
-    if not all_guilds:
-        print("No servers found.")
-        return
-
-    print(f"\nFound {len(all_guilds)} server(s) to process.\n")
-
-    confirm = input("Type 'yes' to mark all these servers as read: ").strip()
-    if confirm.lower() != "yes":
-        print("Cancelled.")
-        return
-
-    print()
-    read_states_cache = _get_read_states(token)
-
-    success = failed = 0
-    for g in all_guilds:
-        guild_id = g["id"]
-        name = g["name"]
-
-        try:
-            channels = get_guild_channels(token, guild_id)
-            unread_channels = []
-
-            for c in channels:
-                if c.get("type") in (0, 5) and c.get(
-                    "last_message_id"
-                ):  # Text channels and news channels
-                    channel_id = c["id"]
-                    last_msg = c["last_message_id"]
-                    # If the channel is unread (not in read states, or read state is older than last msg)
-                    if read_states_cache.get(channel_id) != last_msg:
-                        unread_channels.append((channel_id, last_msg))
-
-            if not unread_channels:
-                print(f"  ✓  Already Read: {name} (Skipping API call)")
-                success += 1
-                continue
-
-            print(
-                f"  >  Marking {name} as read ({len(unread_channels)} unread channels)..."
-            )
-            
-            # Send a single guild-level ACK instead of channel-level ACKs
-            status, text = mark_guild_read(token, guild_id)
-            
-            if status in (200, 204):
-                print(f"     ✓ Success")
-                success += 1
-            else:
-                print(f"     ✗ Failed (HTTP {status} - {text})")
-                failed += 1
-                if "Cloudflare IP Ban" in text:
-                    print(
-                        "\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting."
-                    )
-                    return
-            
-            # Use a safe delay with jitter between guild bulk-acks to prevent 429s
-            sleep_time = 4.0 + random.uniform(0.5, 1.5)
-            time.sleep(sleep_time)
-
-        except Exception as e:
-            print(f"  ✗  Failed:      {name}  (Error: {e})")
-            if "Cloudflare IP Ban" in str(e):
-                print("\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
-                return
-            failed += 1
-
-        time.sleep(REQUEST_DELAY)
-
-    print(f"\nDone — marked read {success}, failed {failed}.")
-
-
 def main() -> None:
     print("\n╔══════════════════════════════════════════╗")
     print("║   Discord Mass Account Cleanup Tool      ║")
@@ -692,7 +536,6 @@ def main() -> None:
             print("  [1] Mass Leave Servers")
             print("  [2] Mass Remove Friends")
             print("  [3] Mass Mark DMs as Read")
-            print("  [4] Mass Mark Servers as Read")
             print("  [t] Change Token / Switch Account")
             print("  [q] Quit\n")
 
@@ -704,8 +547,6 @@ def main() -> None:
                 mass_remove_friends(token)
             elif choice == "3":
                 mass_mark_read(token)
-            elif choice == "4":
-                mass_mark_guilds_read(token)
             elif choice == "t":
                 if "DISCORD_TOKEN" in os.environ:
                     del os.environ["DISCORD_TOKEN"]
