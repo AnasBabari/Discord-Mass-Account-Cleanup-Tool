@@ -162,23 +162,32 @@ def remove_friend(token: str, user_id: str) -> tuple[int, str]:
 
 import websocket
 
+import threading
+
 def _get_read_states(token: str) -> list[str]:
     """Connects to the Discord WS to extract all channel IDs from read_state."""
     channel_ids = []
+    has_received_ready = [False]  # use list to mutate in nested function
     print("  [WS] Connecting to Discord Gateway to fetch your read states...")
 
     def on_message(ws, message):
-        data = json.loads(message)
-        if data.get("op") == 9:
-            print("  [WS] Invalid session! Token might be bad or WS blocked.")
-            ws.close()
-        elif data.get("t") == "READY":
-            d = data.get("d", {})
-            if "read_state" in d and "entries" in d["read_state"]:
-                for entry in d["read_state"]["entries"]:
-                    if entry.get("id"):
-                        channel_ids.append(entry.get("id"))
-            print("  [WS] Successfully downloaded read states.")
+        try:
+            data = json.loads(message)
+            if data.get("op") == 9:
+                print("  [WS] Invalid session! Token might be bad or WS blocked.")
+                ws.close()
+            elif data.get("t") == "READY":
+                has_received_ready[0] = True
+                d = data.get("d")
+                if isinstance(d, dict):
+                    read_state = d.get("read_state")
+                    if isinstance(read_state, dict) and "entries" in read_state:
+                        for entry in read_state["entries"]:
+                            if isinstance(entry, dict) and entry.get("id"):
+                                channel_ids.append(entry.get("id"))
+                print("  [WS] Successfully downloaded read states.")
+                ws.close()
+        except Exception:
             ws.close()
 
     def on_open(ws):
@@ -205,7 +214,10 @@ def _get_read_states(token: str) -> list[str]:
         ws.send(json.dumps(payload))
 
     def on_error(ws, error):
-        pass  # Ignore minor ws errors to prevent crash dumps
+        try:
+            ws.close()
+        except Exception:
+            pass
 
     ws = websocket.WebSocketApp(
         "wss://gateway.discord.gg/?v=9&encoding=json",
@@ -213,7 +225,22 @@ def _get_read_states(token: str) -> list[str]:
         on_message=on_message,
         on_error=on_error,
     )
-    ws.run_forever()
+    
+    # Run in a thread to allow timeout
+    wst = threading.Thread(target=ws.run_forever)
+    wst.daemon = True
+    wst.start()
+    wst.join(timeout=10.0)
+    
+    if wst.is_alive():
+        print("  [WS] Timeout waiting for READY event. Aborting connection.")
+        ws.close()
+        wst.join()
+        raise RuntimeError("WebSocket connection timed out.")
+
+    if not has_received_ready[0]:
+        raise RuntimeError("Failed to receive READY payload from WebSocket. Connection aborted or failed.")
+
     return channel_ids
 
 
@@ -459,7 +486,7 @@ def mass_remove_friends(token: str) -> None:
 
 
 def mass_read_notifications(token: str) -> None:
-    print("\nFetching your unread notifications…")
+    print("\\nFetching your unread notifications…")
     
     confirm = input("Type 'yes' to mark ALL DMs and Servers as read: ").strip()
     if confirm.lower() != "yes":
@@ -467,12 +494,17 @@ def mass_read_notifications(token: str) -> None:
         return
 
     print()
-    channel_ids = _get_read_states(token)
+    try:
+        channel_ids = _get_read_states(token)
+    except RuntimeError as e:
+        print(f"\\n  ✗  {e}")
+        return
+
     if not channel_ids:
         print("No channels found to mark as read.")
         return
         
-    print(f"\nFound {len(channel_ids)} channel(s) to process.")
+    print(f"\\nFound {len(channel_ids)} channel(s) to process.")
     print("  >  Sending bulk acknowledgment...")
 
     # Generate a Snowflake for the current time + 1 hour to ensure it's in the future
@@ -489,23 +521,42 @@ def mass_read_notifications(token: str) -> None:
             "read_state_type": 0
         })
 
-    payload = {"read_states": read_states_payload}
+    # Chunk the payload into batches of 100 to avoid payload size limits
+    chunk_size = 100
+    chunks = [read_states_payload[i:i + chunk_size] for i in range(0, len(read_states_payload), chunk_size)]
+    
+    success_count = 0
+    fail_count = 0
+    
+    for chunk in chunks:
+        payload = {"read_states": chunk}
+        try:
+            r = _make_api_request("POST", "/read-states/ack-bulk", token, json=payload)
+            if r.status_code in (200, 204):
+                success_count += len(chunk)
+            else:
+                print(f"  ✗  Failed chunk (HTTP {r.status_code} - {get_clean_error(r)})")
+                fail_count += len(chunk)
+        except RuntimeError as e:
+            if "Cloudflare IP Ban" in str(e):
+                print("\\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
+                return
+            print(f"  ✗  Runtime error: {e}")
+            fail_count += len(chunk)
+        except NetworkError as e:
+            print(f"  ✗  Network error: {e}")
+            fail_count += len(chunk)
+        except Exception as e:
+            print(f"  ✗  Failed: {e}")
+            fail_count += len(chunk)
+            
+        if len(chunks) > 1:
+            time.sleep(REQUEST_DELAY)
 
-    try:
-        r = _make_api_request("POST", "/read-states/ack-bulk", token, json=payload)
-        
-        if r.status_code in (200, 204):
-            print(f"  ✓  Success! All notifications have been marked as read.")
-        else:
-            print(f"  ✗  Failed (HTTP {r.status_code} - {get_clean_error(r)})")
-            if "Cloudflare IP Ban" in r.text:
-                print("\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
-    except NetworkError as e:
-        print(f"  ✗  Network error: {e}")
-    except Exception as e:
-        print(f"  ✗  Failed: {e}")
-
-    print("\nDone.")
+    if fail_count == 0:
+        print(f"  ✓  Success! All {success_count} notifications have been marked as read.")
+    else:
+        print(f"\\nDone — marked read {success_count}, failed {fail_count}.")
 
 
 def main() -> None:

@@ -703,7 +703,7 @@ def test_mass_read_notifications_success(mock_api, mock_get_states, mock_in, cap
     dmc.mass_read_notifications("token")
     
     captured = capsys.readouterr().out
-    assert "Success! All notifications have been marked as read." in captured
+    assert "Success! All 2 notifications have been marked as read." in captured
     mock_api.assert_called_once()
     args, kwargs = mock_api.call_args
     assert args[0] == "POST"
@@ -732,11 +732,7 @@ def test_mass_read_notifications_empty(mock_get_states, mock_in, capsys):
 @patch("discord_mass_cleanup._get_read_states", return_value=["ch1"])
 @patch("discord_mass_cleanup._make_api_request")
 def test_mass_read_notifications_cf_ban(mock_api, mock_get_states, mock_in, capsys):
-    mock_r = MagicMock()
-    mock_r.status_code = 403
-    mock_r.text = "Cloudflare IP Ban"
-    mock_r.json.side_effect = ValueError()
-    mock_api.return_value = mock_r
+    mock_api.side_effect = RuntimeError("Cloudflare IP Ban")
 
     dmc.mass_read_notifications("token")
     assert "FATAL: Cloudflare has temporarily banned your IP" in capsys.readouterr().out
