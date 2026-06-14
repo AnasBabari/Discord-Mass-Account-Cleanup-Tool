@@ -443,7 +443,7 @@ def test_mass_remove_friends_empty_selection(mock_get_friends, mock_input, capsy
 
 
 @patch("builtins.input")
-@patch("pwinput.pwinput")
+@patch("discord_mass_cleanup.get_masked_input")
 @patch("os.getenv")
 @patch("discord_mass_cleanup.check_token")
 @patch("discord_mass_cleanup.mass_leave_servers")
@@ -455,12 +455,12 @@ def test_main_menu(
     mock_leave,
     mock_check,
     mock_getenv,
-    mock_pwinput,
+    mock_get_masked_input,
     mock_input,
     capsys,
 ):
     mock_getenv.return_value = None
-    mock_pwinput.return_value = "my_token"
+    mock_get_masked_input.return_value = "my_token"
     mock_check.return_value = True
     # choice 1, 2, 3, 4, invalid choice, q
     mock_input.side_effect = ["1", "2", "3", "9", "q"]
@@ -475,11 +475,11 @@ def test_main_menu(
     assert "Exiting..." in captured
 
 
-@patch("pwinput.pwinput")
+@patch("discord_mass_cleanup.get_masked_input")
 @patch("os.getenv")
-def test_main_no_token(mock_getenv, mock_pwinput, capsys):
+def test_main_no_token(mock_getenv, mock_get_masked_input, capsys):
     mock_getenv.return_value = None
-    mock_pwinput.return_value = ""
+    mock_get_masked_input.return_value = ""
     dmc.main()
     assert "No token entered. Exiting." in capsys.readouterr().out
 
@@ -588,23 +588,23 @@ def test_mass_remove_friends_exception(mock_rm, mock_get, mock_in, capsys):
 
 
 
-@patch("pwinput.pwinput", side_effect=KeyboardInterrupt)
+@patch("discord_mass_cleanup.get_masked_input", side_effect=KeyboardInterrupt)
 @patch("os.getenv", return_value=None)
-def test_main_keyboard_interrupt(mock_getenv, mock_pwinput, capsys):
+def test_main_keyboard_interrupt(mock_getenv, mock_get_masked_input, capsys):
     dmc.main()
     assert "Cancelled." in capsys.readouterr().out
 
 
 def test_main_invalid_token_loop(capsys):
-    import pwinput
+    
 
-    def pw_side_effect(*args, **kwargs):
-        if not hasattr(pw_side_effect, "called"):
-            pw_side_effect.called = True
+    def get_masked_side_effect(*args, **kwargs):
+        if not hasattr(get_masked_side_effect, "called"):
+            get_masked_side_effect.called = True
             return "bad_token"
         raise KeyboardInterrupt()
 
-    with patch("pwinput.pwinput", side_effect=pw_side_effect):
+    with patch("discord_mass_cleanup.get_masked_input", side_effect=get_masked_side_effect):
         with patch("discord_mass_cleanup.check_token", return_value=False):
             try:
                 dmc.main()
