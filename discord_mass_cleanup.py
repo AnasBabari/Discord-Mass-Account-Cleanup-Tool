@@ -13,10 +13,11 @@ Usage:
 import json
 import os
 import time
-import random
 
 import pwinput
 import sys
+import threading
+import websocket
 
 # Test environment detection to preserve 'responses' library compatibility
 IN_PYTEST = "pytest" in sys.modules
@@ -32,7 +33,6 @@ except ImportError:
     from requests.exceptions import RequestException as NetworkError
     HAS_CURL_CFFI = False
 
-import websocket
 from dotenv import load_dotenv
 
 BASE_URL = "https://discord.com/api/v10"
@@ -160,9 +160,7 @@ def remove_friend(token: str, user_id: str) -> tuple[int, str]:
 # ── API helpers (Read States) ─────────────────────────────────────────────────
 
 
-import websocket
 
-import threading
 
 def _get_read_states(token: str) -> list[str]:
     """Connects to the Discord WS to extract all channel IDs from read_state."""

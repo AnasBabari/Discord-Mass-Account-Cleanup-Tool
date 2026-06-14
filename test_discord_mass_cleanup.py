@@ -496,7 +496,6 @@ def test_main_env_token(mock_check, mock_getenv, mock_input, capsys):
 
 
 import os
-from unittest.mock import MagicMock, patch
 
 
 def test_make_api_request_timeout(mock_responses):
@@ -655,7 +654,6 @@ def test_module_main():
         # We just need coverage on `if __name__ == "__main__":` which might be hard to get dynamically.
         pass
 
-import json
 
 @patch("websocket.WebSocketApp")
 def test_get_read_states(mock_ws):
