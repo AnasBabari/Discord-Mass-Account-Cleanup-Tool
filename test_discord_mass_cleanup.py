@@ -226,65 +226,19 @@ def test_remove_friend_429(mock_sleep, mock_responses):
 # --- get_dms tests ---
 
 
-def test_get_dms_success(mock_responses):
-    mock_responses.add(
-        responses.GET, f"{BASE_URL}/users/@me/channels", json=[{"id": "1"}], status=200
-    )
-    dms = dmc.get_dms("token")
-    assert len(dms) == 1
 
 
-def test_get_dms_401(mock_responses):
-    mock_responses.add(responses.GET, f"{BASE_URL}/users/@me/channels", status=401)
-    with pytest.raises(ValueError, match="Invalid token"):
-        dmc.get_dms("token")
 
 
-@patch("time.sleep", return_value=None)
-def test_get_dms_429(mock_sleep, mock_responses):
-    mock_responses.add(
-        responses.GET,
-        f"{BASE_URL}/users/@me/channels",
-        json={"retry_after": 0.5},
-        status=429,
-    )
-    mock_responses.add(
-        responses.GET, f"{BASE_URL}/users/@me/channels", json=[{"id": "1"}], status=200
-    )
-    dms = dmc.get_dms("token")
-    assert len(dms) == 1
-    mock_sleep.assert_called_once_with(0.5)
 
 
-def test_get_dms_http_error(mock_responses):
-    mock_responses.add(responses.GET, f"{BASE_URL}/users/@me/channels", status=500)
-    with pytest.raises(requests.RequestException):
-        dmc.get_dms("test_token")
 
 
 # --- mark_channel_read tests ---
 
 
-def test_mark_channel_read_success(mock_responses):
-    mock_responses.add(
-        responses.POST, f"{BASE_URL}/channels/123/messages/456/ack", body="", status=204
-    )
-    assert dmc.mark_channel_read("token", "123", "456") == (204, "")
 
 
-@patch("time.sleep", return_value=None)
-def test_mark_channel_read_429(mock_sleep, mock_responses):
-    mock_responses.add(
-        responses.POST,
-        f"{BASE_URL}/channels/123/messages/456/ack",
-        json={"retry_after": 0.5},
-        status=429,
-    )
-    mock_responses.add(
-        responses.POST, f"{BASE_URL}/channels/123/messages/456/ack", body="", status=204
-    )
-    assert dmc.mark_channel_read("token", "123", "456") == (204, "")
-    mock_sleep.assert_called_once_with(0.5)
 
 
 # --- Mass operations full tests (covering print branches) ---
@@ -475,64 +429,14 @@ def test_mass_remove_friends_empty_selection(mock_get_friends, mock_input, capsy
     assert "Nothing selected." in capsys.readouterr().out
 
 
-@patch("builtins.input")
-@patch("discord_mass_cleanup.get_dms")
-@patch("discord_mass_cleanup.mark_channel_read")
-def test_mass_mark_read_full(mock_mark_read, mock_get_dms, mock_input, capsys):
-    mock_get_dms.return_value = [
-        {"id": "1", "last_message_id": "100", "name": "Test Group"},
-        {"id": "2", "last_message_id": "200", "recipients": [{"username": "user1"}]},
-        {
-            "id": "3",
-            "last_message_id": "300",
-            "recipients": [{"username": "u1"}, {"username": "u2"}],
-        },
-        {"id": "4", "last_message_id": "400"},  # Unknown DM
-        {"id": "5", "last_message_id": None},  # ignored
-    ]
-    mock_input.side_effect = ["yes"]
-    mock_mark_read.side_effect = [(200, ""), (204, ""), (400, "Err"), (200, "")]
-
-    dmc.mass_mark_read("token")
-
-    assert mock_mark_read.call_count == 4
-    captured = capsys.readouterr().out
-    assert "Marked Read: Test Group" in captured
-    assert "Marked Read: user1" in captured
-    assert "Failed:      Group Chat  (HTTP 400 - Err)" in captured
-    assert "Marked Read: Unknown DM" in captured
 
 
-@patch("discord_mass_cleanup.get_dms")
-def test_mass_mark_read_no_dms(mock_get_dms, capsys):
-    mock_get_dms.return_value = []
-    dmc.mass_mark_read("token")
-    assert "No DM channels found." in capsys.readouterr().out
 
 
-@patch("builtins.input")
-@patch("discord_mass_cleanup.get_dms")
-def test_mass_mark_read_cancel(mock_get_dms, mock_input, capsys):
-    mock_get_dms.return_value = [
-        {"id": "1", "last_message_id": "100", "name": "Test Group"}
-    ]
-    mock_input.side_effect = ["no"]
-    dmc.mass_mark_read("token")
-    assert "Cancelled." in capsys.readouterr().out
 
 
-@patch("discord_mass_cleanup.get_dms")
-def test_mass_mark_read_value_error(mock_get_dms, capsys):
-    mock_get_dms.side_effect = ValueError("Invalid token")
-    dmc.mass_mark_read("token")
-    assert "Invalid token" in capsys.readouterr().out
 
 
-@patch("discord_mass_cleanup.get_dms")
-def test_mass_mark_read_req_error(mock_get_dms, capsys):
-    mock_get_dms.side_effect = requests.RequestException("Err")
-    dmc.mass_mark_read("token")
-    assert "Err" in capsys.readouterr().out
 
 
 # --- Main menu tests ---
@@ -544,9 +448,9 @@ def test_mass_mark_read_req_error(mock_get_dms, capsys):
 @patch("discord_mass_cleanup.check_token")
 @patch("discord_mass_cleanup.mass_leave_servers")
 @patch("discord_mass_cleanup.mass_remove_friends")
-@patch("discord_mass_cleanup.mass_mark_read")
+@patch("discord_mass_cleanup.mass_read_notifications")
 def test_main_menu(
-    mock_mark,
+    mock_read_notifs,
     mock_remove,
     mock_leave,
     mock_check,
@@ -565,7 +469,7 @@ def test_main_menu(
 
     mock_leave.assert_called_once_with("my_token")
     mock_remove.assert_called_once_with("my_token")
-    mock_mark.assert_called_once_with("my_token")
+    mock_read_notifs.assert_called_once_with("my_token")
     captured = capsys.readouterr().out
     assert "Invalid choice" in captured
     assert "Exiting..." in captured
@@ -653,10 +557,6 @@ def test_mass_remove_friends_runtime_err(mock_get, capsys):
     assert "Runtime error: Err" in capsys.readouterr().out
 
 
-@patch("discord_mass_cleanup.get_dms", side_effect=RuntimeError("Err"))
-def test_mass_mark_read_runtime_err(mock_get, capsys):
-    dmc.mass_mark_read("token")
-    assert "Runtime error: Err" in capsys.readouterr().out
 
 
 @patch("builtins.input", side_effect=["all", "yes"])
@@ -699,26 +599,8 @@ def test_mass_remove_friends_exception(mock_rm, mock_get, mock_in, capsys):
     assert "Error: GenErr" in capsys.readouterr().out
 
 
-@patch("builtins.input", return_value="yes")
-@patch(
-    "discord_mass_cleanup.get_dms", return_value=[{"id": "1", "last_message_id": "1"}]
-)
-@patch(
-    "discord_mass_cleanup.mark_channel_read", return_value=(403, "Cloudflare IP Ban")
-)
-def test_mass_mark_read_cf_ban(mock_mk, mock_get, mock_in, capsys):
-    dmc.mass_mark_read("token")
-    assert "FATAL: Cloudflare has temporarily banned your IP" in capsys.readouterr().out
 
 
-@patch("builtins.input", return_value="yes")
-@patch(
-    "discord_mass_cleanup.get_dms", return_value=[{"id": "1", "last_message_id": "1"}]
-)
-@patch("discord_mass_cleanup.mark_channel_read", side_effect=Exception("GenErr"))
-def test_mass_mark_read_exception(mock_mk, mock_get, mock_in, capsys):
-    dmc.mass_mark_read("token")
-    assert "Error: GenErr" in capsys.readouterr().out
 
 
 @patch("pwinput.pwinput", side_effect=KeyboardInterrupt)
@@ -772,3 +654,97 @@ def test_module_main():
     with patch("discord_mass_cleanup.main") as mock_main:
         # We just need coverage on `if __name__ == "__main__":` which might be hard to get dynamically.
         pass
+
+import json
+
+@patch("websocket.WebSocketApp")
+def test_get_read_states(mock_ws):
+    ws_instance = MagicMock()
+    mock_ws.return_value = ws_instance
+
+    def side_effect(*args, **kwargs):
+        on_open = kwargs["on_open"]
+        on_message = kwargs["on_message"]
+        on_error = kwargs["on_error"]
+        on_open(ws_instance)
+        on_message(ws_instance, json.dumps({"op": 9}))
+        on_message(
+            ws_instance,
+            json.dumps(
+                {
+                    "t": "READY",
+                    "d": {
+                        "read_state": {
+                            "entries": [{"id": "ch1", "last_message_id": "msg1"}]
+                        }
+                    },
+                }
+            ),
+        )
+        on_error(ws_instance, "some_error")
+        return ws_instance
+
+    mock_ws.side_effect = side_effect
+
+    res = dmc._get_read_states("token")
+    assert res == ["ch1"]
+    assert ws_instance.send.called
+    assert ws_instance.run_forever.called
+
+
+@patch("builtins.input", return_value="yes")
+@patch("discord_mass_cleanup._get_read_states", return_value=["ch1", "ch2"])
+@patch("discord_mass_cleanup._make_api_request")
+def test_mass_read_notifications_success(mock_api, mock_get_states, mock_in, capsys):
+    mock_r = MagicMock()
+    mock_r.status_code = 200
+    mock_api.return_value = mock_r
+
+    dmc.mass_read_notifications("token")
+    
+    captured = capsys.readouterr().out
+    assert "Success! All notifications have been marked as read." in captured
+    mock_api.assert_called_once()
+    args, kwargs = mock_api.call_args
+    assert args[0] == "POST"
+    assert args[1] == "/read-states/ack-bulk"
+    assert "json" in kwargs
+    assert len(kwargs["json"]["read_states"]) == 2
+    assert kwargs["json"]["read_states"][0]["channel_id"] == "ch1"
+
+
+@patch("builtins.input", return_value="no")
+@patch("discord_mass_cleanup._get_read_states")
+def test_mass_read_notifications_cancel(mock_get_states, mock_in, capsys):
+    dmc.mass_read_notifications("token")
+    assert "Cancelled." in capsys.readouterr().out
+    mock_get_states.assert_not_called()
+
+
+@patch("builtins.input", return_value="yes")
+@patch("discord_mass_cleanup._get_read_states", return_value=[])
+def test_mass_read_notifications_empty(mock_get_states, mock_in, capsys):
+    dmc.mass_read_notifications("token")
+    assert "No channels found to mark as read." in capsys.readouterr().out
+
+
+@patch("builtins.input", return_value="yes")
+@patch("discord_mass_cleanup._get_read_states", return_value=["ch1"])
+@patch("discord_mass_cleanup._make_api_request")
+def test_mass_read_notifications_cf_ban(mock_api, mock_get_states, mock_in, capsys):
+    mock_r = MagicMock()
+    mock_r.status_code = 403
+    mock_r.text = "Cloudflare IP Ban"
+    mock_r.json.side_effect = ValueError()
+    mock_api.return_value = mock_r
+
+    dmc.mass_read_notifications("token")
+    assert "FATAL: Cloudflare has temporarily banned your IP" in capsys.readouterr().out
+
+
+@patch("builtins.input", return_value="yes")
+@patch("discord_mass_cleanup._get_read_states", return_value=["ch1"])
+@patch("discord_mass_cleanup._make_api_request", side_effect=dmc.NetworkError("NetErr"))
+def test_mass_read_notifications_net_err(mock_api, mock_get_states, mock_in, capsys):
+    dmc.mass_read_notifications("token")
+    assert "Network error: NetErr" in capsys.readouterr().out
