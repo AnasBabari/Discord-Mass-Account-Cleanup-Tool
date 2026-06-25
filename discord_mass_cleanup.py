@@ -64,14 +64,16 @@ def _make_api_request(
             raise
 
         if r.status_code == 429:
-            if "<html" in r.text.lower() and "1015" in r.text:
-                raise RuntimeError("Cloudflare IP Ban (Error 1015) - You are making requests too fast and Discord blocked your IP for 1 hour.")
-            
-            try:
-                # If we get a Discord 429, parse retry_after
-                wait = float(r.json().get("retry_after", 5.0))
-            except Exception:
+            if "<html" in r.text.lower():
+                if "1015" in r.text:
+                    raise RuntimeError("Cloudflare IP Ban (Error 1015) - You are making requests too fast and Discord blocked your IP for 1 hour.")
+                # Non-1015 HTML 429 (generic Cloudflare rate limit) — use default wait
                 wait = 5.0
+            else:
+                try:
+                    wait = float(r.json().get("retry_after", 5.0))
+                except (ValueError, KeyError):
+                    wait = 5.0
             if not quiet:
                 print(f"  ⏳  Rate-limited — waiting {wait:.2f}s…")
             time.sleep(wait)
@@ -118,7 +120,10 @@ def get_guilds(token: str) -> list[dict]:
             raise ValueError("\n✗  Invalid token — please double-check and try again.")
         r.raise_for_status()
 
-        page = r.json()
+        try:
+            page = r.json()
+        except ValueError as e:
+            raise RuntimeError(f"Failed to decode guild list response: {e}") from e
         guilds.extend(page)
 
         if len(page) < 200:
@@ -145,7 +150,10 @@ def get_friends(token: str) -> list[dict]:
         raise ValueError("\n✗  Invalid token — please double-check and try again.")
     r.raise_for_status()
 
-    relationships = r.json()
+    try:
+        relationships = r.json()
+    except ValueError as e:
+        raise RuntimeError(f"Failed to decode relationships response: {e}") from e
 
     # type 1 is friend
     friends = [rel for rel in relationships if rel.get("type") == 1]
@@ -158,9 +166,14 @@ def remove_friend(token: str, user_id: str) -> tuple[int, str]:
     return r.status_code, get_clean_error(r)
 
 
-# ── API helpers (Read States) ─────────────────────────────────────────────────
+def block_user(token: str, user_id: str) -> tuple[int, str]:
+    """Block a user by user ID."""
+    payload = {"type": 2}
+    r = _make_api_request("PUT", f"/users/@me/relationships/{user_id}", token, json=payload)
+    return r.status_code, get_clean_error(r)
 
 
+# ── API helpers (Read States) ─────────────────────────────────────────────
 
 
 def _get_read_states(token: str) -> list[str]:
@@ -235,7 +248,11 @@ def _get_read_states(token: str) -> list[str]:
                 "client_state": {"guild_versions": {}},
             },
         }
-        ws.send(json.dumps(payload))
+        try:
+            ws.send(json.dumps(payload))
+        except Exception as e:
+            print(f"  [WS] Failed to send identify payload: {e}")
+            ws.close()
 
     def on_error(ws, error):
         print(f"  [WS] Error: {error}")
@@ -260,7 +277,7 @@ def _get_read_states(token: str) -> list[str]:
     if wst.is_alive():
         print("  [WS] Timeout waiting for READY event. Aborting connection.")
         ws.close()
-        wst.join()
+        wst.join(timeout=1.0)
         raise RuntimeError("WebSocket connection timed out.")
 
     if not has_received_ready:
@@ -586,7 +603,6 @@ def mass_read_notifications(token: str) -> None:
 
 def get_masked_input(prompt: str = "Paste token: ", mask: str = "*") -> str:
     """A cross-platform masked input that correctly handles Ctrl+C."""
-    import sys
     if sys.platform == "win32":
         import msvcrt
         sys.stdout.write(prompt)

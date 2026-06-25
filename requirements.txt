@@ -1,2 +1,6 @@
 requests
 websocket-client
+keyring
+PyQt5
+qtawesome
+curl_cffi

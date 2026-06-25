@@ -1,50 +1,87 @@
 # Discord Mass Account Cleanup Tool
 
-A Python script that lets you clean up your Discord account. Through an interactive menu, you can:
-- **Mass leave servers** (by number, range, or 'all')
-- **Mass remove friends** (by number, range, or 'all')
-- **Mass read notifications** (instant bulk-clear for all DMs, Group Chats, and Servers)
+A desktop app and CLI tool for quickly cleaning up your Discord account. Mass leave servers, remove friends, and clear notifications — all in one place.
 
 ![Screenshot](assets/screenshot.png)
 
-⚠️ **Disclaimer:** This tool uses your personal Discord user token. Automating user accounts ("self-botting") is against Discord's Terms of Service. Use this at your own discretion. It is generally low risk for a one-off cleanup, but you are solely responsible for your account.
+## Features
+
+- **Mass Leave Servers** — select individually, by range, or all at once
+- **Mass Remove Friends** — same flexible selection with search filtering
+- **Mass Block Users** — bulk-block selected friends
+- **Mass Read Notifications** — instantly mark all DMs, group chats, and server channels as read
+- **Desktop GUI** — polished PyQt5 interface with dark theme, real-time progress, and logging
+- **CLI Mode** — fully interactive terminal interface, no GUI required
+- **Secure Token Storage** — token saved to your OS credential manager via `keyring`
+- **Rate-Limit Handling** — automatic retry with backoff on Discord 429s and Cloudflare blocks
 
 ## Requirements
 
-Install the required dependencies using pip:
+- Python 3.10+
+
+Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-Run the script via terminal or command prompt:
+### GUI (recommended)
+```bash
+python gui_app.py
+```
+
+### CLI
 ```bash
 python discord_mass_cleanup.py
 ```
 
-Follow the on-screen instructions. You will be prompted to paste your user token securely and then choose which cleanup operation you want to perform.
+Follow the on-screen instructions. You'll be prompted to paste your user token securely and then choose which cleanup operation to perform.
 
+## How to Get Your Discord User Token
 
-## How to get your Discord User Token
-
-To get your Discord account's authorization token (which allows you to control your account via the API), you can extract it using your web browser's developer tools. 
-
-1. Open a browser (like Chrome or Firefox) and go to the Discord Web App.
+1. Open a browser and go to the [Discord Web App](https://discord.com/app).
 2. Log in to your account.
-3. Open the Developer Tools by pressing F12 (or Ctrl + Shift + I on Windows / Cmd + Option + I on Mac).
-4. Go to the Application tab at the top (if you don't see it, click the >> icon).
-5. In the left sidebar, expand Local Storage and click on https://discord.com.
-6. Press Ctrl + Shift + M (or Cmd + Shift + M) to toggle device emulation to "Mobile". (Discord often hides the token from local storage on desktop views, so this step makes it visible).
-7. Type "token" into the filter search bar. Your token will appear on the right. (Copy the actual text, excluding the surrounding quotes).
+3. Open Developer Tools (`F12` or `Ctrl+Shift+I` / `Cmd+Option+I`).
+4. Go to the **Application** tab (click `>>` if hidden).
+5. In the left sidebar, expand **Local Storage** → click `https://discord.com`.
+6. Press `Ctrl+Shift+M` (`Cmd+Shift+M` on Mac) to toggle mobile device emulation — Discord hides the token on desktop views.
+7. Type `token` in the filter bar. Copy the value (without surrounding quotes).
 
 ## Testing
 
-This project includes a comprehensive test suite mocking API responses to handle rate limits, pagination, and edge cases. To run the tests:
+The project includes a test suite with mocked API responses covering rate limits, pagination, and edge cases:
+
 ```bash
-pytest test_discord_mass_cleanup.py
+pytest test_discord_mass_cleanup.py -v
 ```
+
+## Project Structure
+
+```
+├── discord_mass_cleanup.py   # Core API logic & CLI entry point
+├── gui_app.py                # PyQt5 desktop GUI entry point
+├── workers.py                # Background thread workers for async API calls
+├── ui/
+│   ├── theme.py              # Color constants & QSS loader
+│   ├── theme.qss             # Qt stylesheet (dark theme)
+│   ├── components.py         # Reusable widgets (loading overlay, toasts, badges)
+│   └── pages/
+│       ├── login.py          # Token input & auth page
+│       ├── servers.py        # Server list & leave functionality
+│       ├── friends.py        # Friends list, remove & block functionality
+│       ├── notifications.py  # Bulk mark-as-read
+│       └── logs.py           # Terminal-style log viewer
+├── test_discord_mass_cleanup.py
+├── requirements.txt
+└── assets/
+    └── screenshot.png
+```
+
+## Disclaimer
+
+> ⚠️ This tool uses your personal Discord user token. Automating user accounts ("self-botting") is against Discord's Terms of Service. Use at your own discretion. It is generally low risk for a one-off cleanup, but you are solely responsible for your account.
 
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under the [MIT License](LICENSE).

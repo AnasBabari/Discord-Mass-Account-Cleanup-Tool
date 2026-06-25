@@ -226,17 +226,7 @@ def test_remove_friend_429(mock_sleep, mock_responses):
 # --- get_dms tests ---
 
 
-
-
-
-
-
-
-
-
-# --- mark_channel_read tests ---
-
-
+# --- Mass operations full tests (covering print branches) ---
 
 
 
@@ -430,15 +420,6 @@ def test_mass_remove_friends_empty_selection(mock_get_friends, mock_input, capsy
 
 
 
-
-
-
-
-
-
-
-
-
 # --- Main menu tests ---
 
 
@@ -579,10 +560,6 @@ def test_mass_remove_friends_exception(mock_rm, mock_get, mock_in, capsys):
     assert "Error: GenErr" in capsys.readouterr().out
 
 
-
-
-
-
 @patch("discord_mass_cleanup.get_masked_input", side_effect=KeyboardInterrupt)
 def test_main_keyboard_interrupt(mock_get_masked_input, capsys):
     dmc.main()
@@ -604,12 +581,6 @@ def test_main_invalid_token_loop(capsys):
                 dmc.main()
             except KeyboardInterrupt:
                 pass
-
-
-def test_module_main():
-    with patch("discord_mass_cleanup.main") as mock_main:
-        # We just need coverage on `if __name__ == "__main__":` which might be hard to get dynamically.
-        pass
 
 
 @patch("websocket.WebSocketApp")
