@@ -4,6 +4,12 @@ A desktop app and CLI tool for quickly cleaning up your Discord account. Mass le
 
 ![Screenshot](assets/screenshot.png)
 
+## Download
+
+> **No Python required** — grab the latest pre-built Windows executable from the [**Releases page**](https://github.com/AnasBabari/Discord-Mass-Account-Cleanup-Tool/releases/latest).
+
+Just download `Discord-Mass-Cleanup-Tool.exe`, double-click, and go.
+
 ## Features
 
 - **Mass Leave Servers** — select individually, by range, or all at once

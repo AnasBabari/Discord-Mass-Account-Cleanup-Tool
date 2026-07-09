@@ -15,7 +15,6 @@ venv.bak/
 # Build artifacts
 build/
 dist/
-*.spec
 
 # Coverage / testing
 .coverage
