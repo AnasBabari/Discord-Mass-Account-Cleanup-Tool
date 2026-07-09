@@ -2,7 +2,7 @@
 
 A desktop app and CLI tool for quickly cleaning up your Discord account. Mass leave servers, remove friends, and clear notifications — all in one place.
 
-![Screenshot](assets/screenshot.png)
+![Screenshot](source/assets/screenshot.png)
 
 ## Download
 
@@ -21,28 +21,44 @@ Just download `Discord-Mass-Cleanup-Tool.exe`, double-click, and go.
 - **Secure Token Storage** — token saved to your OS credential manager via `keyring`
 - **Rate-Limit Handling** — automatic retry with backoff on Discord 429s and Cloudflare blocks
 
-## Requirements
+## For Developers
+
+All source code lives in the [`source/`](source/) directory.
+
+### Requirements
 
 - Python 3.10+
 
-Install dependencies:
 ```bash
+cd source
 pip install -r requirements.txt
 ```
 
-## Usage
+### Run from source
 
-### GUI (recommended)
+**GUI (recommended):**
 ```bash
+cd source
 python gui_app.py
 ```
 
-### CLI
+**CLI:**
 ```bash
+cd source
 python discord_mass_cleanup.py
 ```
 
 Follow the on-screen instructions. You'll be prompted to paste your user token securely and then choose which cleanup operation to perform.
+
+### Build the exe yourself
+
+```bash
+cd source
+pip install pyinstaller
+pyinstaller gui_app.spec
+```
+
+The built exe will be at `source/dist/gui_app.exe`.
 
 ## How to Get Your Discord User Token
 
@@ -56,32 +72,37 @@ Follow the on-screen instructions. You'll be prompted to paste your user token s
 
 ## Testing
 
-The project includes a test suite with mocked API responses covering rate limits, pagination, and edge cases:
-
 ```bash
+cd source
 pytest test_discord_mass_cleanup.py -v
 ```
 
 ## Project Structure
 
 ```
-├── discord_mass_cleanup.py   # Core API logic & CLI entry point
-├── gui_app.py                # PyQt5 desktop GUI entry point
-├── workers.py                # Background thread workers for async API calls
-├── ui/
-│   ├── theme.py              # Color constants & QSS loader
-│   ├── theme.qss             # Qt stylesheet (dark theme)
-│   ├── components.py         # Reusable widgets (loading overlay, toasts, badges)
-│   └── pages/
-│       ├── login.py          # Token input & auth page
-│       ├── servers.py        # Server list & leave functionality
-│       ├── friends.py        # Friends list, remove & block functionality
-│       ├── notifications.py  # Bulk mark-as-read
-│       └── logs.py           # Terminal-style log viewer
-├── test_discord_mass_cleanup.py
-├── requirements.txt
-└── assets/
-    └── screenshot.png
+├── README.md
+├── LICENSE
+├── .github/workflows/release.yml   # CI: auto-build exe on tag push
+└── source/
+    ├── gui_app.py                   # PyQt5 desktop GUI entry point
+    ├── discord_mass_cleanup.py      # Core API logic & CLI entry point
+    ├── workers.py                   # Background thread workers
+    ├── gui_app.spec                 # PyInstaller build config
+    ├── requirements.txt
+    ├── ui/
+    │   ├── theme.py                 # Color constants & QSS loader
+    │   ├── theme.qss                # Qt stylesheet (dark theme)
+    │   ├── components.py            # Reusable widgets (loading overlay, toasts)
+    │   └── pages/
+    │       ├── login.py             # Token input & auth page
+    │       ├── servers.py           # Server list & leave functionality
+    │       ├── friends.py           # Friends list, remove & block
+    │       ├── notifications.py     # Bulk mark-as-read
+    │       └── logs.py              # Terminal-style log viewer
+    ├── test_discord_mass_cleanup.py
+    ├── test_gui.py
+    └── assets/
+        └── screenshot.png
 ```
 
 ## Disclaimer
