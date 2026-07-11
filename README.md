@@ -2,7 +2,7 @@
 
 A desktop app and CLI tool for quickly cleaning up your Discord account. Mass leave servers, remove friends, block users, and clear notifications — all in one place.
 
-![Screenshot](source/assets/screenshot.png)
+![Servers Page](source/assets/servers.png)
 
 ## Download
 
@@ -21,6 +21,12 @@ Just download `Discord-Mass-Cleanup-Tool.exe`, double-click, and go.
 - **Secure Token Storage** — token saved to your OS credential manager via `keyring`
 - **Rate-Limit Handling** — automatic retry with backoff on Discord 429s and Cloudflare blocks
 - **Anti-Detection** — uses `curl_cffi` with browser impersonation to bypass Cloudflare fingerprinting
+
+## Screenshots
+
+| Servers | Friends | Notifications |
+|---|---|---|
+| ![Servers](source/assets/servers.png) | ![Friends](source/assets/friends.png) | ![Notifications](source/assets/notifications.png) |
 
 ## For Developers
 
@@ -102,7 +108,9 @@ pytest test_gui.py -v                     # GUI component tests (4 tests)
     ├── test_discord_mass_cleanup.py  # 58 API & CLI tests
     ├── test_gui.py                   # 4 GUI component tests
     └── assets/
-        └── screenshot.png
+        ├── servers.png
+        ├── friends.png
+        └── notifications.png
 ```
 
 ## Disclaimer
