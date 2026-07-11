@@ -1,6 +1,6 @@
 # Discord Mass Account Cleanup Tool
 
-A desktop app and CLI tool for quickly cleaning up your Discord account. Mass leave servers, remove friends, and clear notifications — all in one place.
+A desktop app and CLI tool for quickly cleaning up your Discord account. Mass leave servers, remove friends, block users, and clear notifications — all in one place.
 
 ![Screenshot](source/assets/screenshot.png)
 
@@ -12,14 +12,15 @@ Just download `Discord-Mass-Cleanup-Tool.exe`, double-click, and go.
 
 ## Features
 
-- **Mass Leave Servers** — select individually, by range, or all at once
+- **Mass Leave Servers** — select individually, by range, or all at once with server details and member-since dates
 - **Mass Remove Friends** — same flexible selection with search filtering
 - **Mass Block Users** — bulk-block selected friends
-- **Mass Read Notifications** — instantly mark all DMs, group chats, and server channels as read
-- **Desktop GUI** — polished PyQt5 interface with dark theme, real-time progress, and logging
+- **Mass Read Notifications** — instantly mark all DMs, group chats, and server channels as read via WebSocket
+- **Desktop GUI** — polished PyQt5 interface with dark theme, animated splash screen, real-time progress, and toast notifications
 - **CLI Mode** — fully interactive terminal interface, no GUI required
 - **Secure Token Storage** — token saved to your OS credential manager via `keyring`
 - **Rate-Limit Handling** — automatic retry with backoff on Discord 429s and Cloudflare blocks
+- **Anti-Detection** — uses `curl_cffi` with browser impersonation to bypass Cloudflare fingerprinting
 
 ## For Developers
 
@@ -33,6 +34,8 @@ All source code lives in the [`source/`](source/) directory.
 cd source
 pip install -r requirements.txt
 ```
+
+Key dependencies: `curl_cffi` (Cloudflare bypass via browser impersonation), `websocket-client` (Discord Gateway for notification read-states), `PyQt5` + `qtawesome` (GUI), `keyring` (secure token storage).
 
 ### Run from source
 
@@ -48,8 +51,6 @@ cd source
 python discord_mass_cleanup.py
 ```
 
-Follow the on-screen instructions. You'll be prompted to paste your user token securely and then choose which cleanup operation to perform.
-
 ### Build the exe yourself
 
 ```bash
@@ -62,19 +63,17 @@ The built exe will be at `source/dist/gui_app.exe`.
 
 ## How to Get Your Discord User Token
 
-1. Open a browser and go to the [Discord Web App](https://discord.com/app).
-2. Log in to your account.
-3. Open Developer Tools (`F12` or `Ctrl+Shift+I` / `Cmd+Option+I`).
-4. Go to the **Application** tab (click `>>` if hidden).
-5. In the left sidebar, expand **Local Storage** → click `https://discord.com`.
-6. Press `Ctrl+Shift+M` (`Cmd+Shift+M` on Mac) to toggle mobile device emulation — Discord hides the token on desktop views.
-7. Type `token` in the filter bar. Copy the value (without surrounding quotes).
+1. Open [Discord Web App](https://discord.com/app) and log in.
+2. Press `F12` → go to the **Application** tab → **Local Storage** → `https://discord.com`.
+3. Press `Ctrl+Shift+M` (`Cmd+Shift+M` on Mac) to enable mobile view (Discord hides the token on desktop).
+4. Type `token` in the filter bar and copy the value (without quotes).
 
 ## Testing
 
 ```bash
 cd source
-pytest test_discord_mass_cleanup.py -v
+pytest test_discord_mass_cleanup.py -v   # Core API tests (58 tests)
+pytest test_gui.py -v                     # GUI component tests (4 tests)
 ```
 
 ## Project Structure
@@ -82,11 +81,12 @@ pytest test_discord_mass_cleanup.py -v
 ```
 ├── README.md
 ├── LICENSE
+├── .gitignore
 ├── .github/workflows/release.yml   # CI: auto-build exe on tag push
 └── source/
     ├── gui_app.py                   # PyQt5 desktop GUI entry point
     ├── discord_mass_cleanup.py      # Core API logic & CLI entry point
-    ├── workers.py                   # Background thread workers
+    ├── workers.py                   # Background QThread workers
     ├── gui_app.spec                 # PyInstaller build config
     ├── requirements.txt
     ├── ui/
@@ -99,8 +99,8 @@ pytest test_discord_mass_cleanup.py -v
     │       ├── friends.py           # Friends list, remove & block
     │       ├── notifications.py     # Bulk mark-as-read
     │       └── logs.py              # Terminal-style log viewer
-    ├── test_discord_mass_cleanup.py
-    ├── test_gui.py
+    ├── test_discord_mass_cleanup.py  # 58 API & CLI tests
+    ├── test_gui.py                   # 4 GUI component tests
     └── assets/
         └── screenshot.png
 ```
