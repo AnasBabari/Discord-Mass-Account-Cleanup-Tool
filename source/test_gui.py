@@ -5,6 +5,7 @@ from gui_app import MainWindow
 from ui.pages.login import LoginPage
 from ui.pages.servers import ServersPage
 from ui.pages.friends import FriendsPage
+from ui.pages.blocked import BlockedPage
 from ui.pages.notifications import NotificationsPage
 from ui.pages.logs import LogsPage
 from workers import LoginWorker
@@ -17,7 +18,7 @@ def app(qtbot):
 
 def test_main_window_initialization(app):
     assert app.windowTitle() == "Discord Mass Account Cleanup Tool"
-    assert app.pages.count() == 5
+    assert app.pages.count() == 6
     
 def test_page_switching(app, qtbot):
     # Default is login
@@ -29,9 +30,15 @@ def test_page_switching(app, qtbot):
     
     app.switch_page("friends")
     assert app.pages.currentIndex() == 2
+    
+    app.switch_page("blocked")
+    assert app.pages.currentIndex() == 3
 
     app.switch_page("notifications")
-    assert app.pages.currentIndex() == 3
+    assert app.pages.currentIndex() == 4
+    
+    app.switch_page("logs")
+    assert app.pages.currentIndex() == 5
 
 def test_login_page(qtbot):
     page = LoginPage()

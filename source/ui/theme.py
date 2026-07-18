@@ -20,7 +20,14 @@ WARNING       = "#f59e0b"
 SIDEBAR_ACTIVE= "#162436"
 
 def load_stylesheet():
-    import os
+    import os, sys
+    if hasattr(sys, '_MEIPASS'):
+        base_dir = getattr(sys, '_MEIPASS')
+    else:
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+    assets_dir = os.path.join(base_dir, 'assets').replace('\\', '/')
+    
     qss_path = os.path.join(os.path.dirname(__file__), "theme.qss")
     with open(qss_path, "r", encoding="utf-8") as f:
-        return f.read()
+        qss = f.read()
+    return qss.replace("ASSETS_DIR", assets_dir)

@@ -165,6 +165,27 @@ def remove_friend(token: str, user_id: str) -> tuple[int, str]:
     r = _make_api_request("DELETE", f"/users/@me/relationships/{user_id}", token)
     return r.status_code, get_clean_error(r)
 
+def get_blocked_users(token: str) -> list[dict]:
+    """Fetch all blocked users."""
+    r = _make_api_request("GET", "/users/@me/relationships", token)
+    if r.status_code == 401:
+        raise ValueError("\n✗  Invalid token — please double-check and try again.")
+    r.raise_for_status()
+
+    try:
+        relationships = r.json()
+    except ValueError as e:
+        raise RuntimeError(f"Failed to decode relationships response: {e}") from e
+
+    # type 2 is blocked
+    blocked = [rel for rel in relationships if rel.get("type") == 2]
+    return blocked
+
+def unblock_user(token: str, user_id: str) -> tuple[int, str]:
+    """Unblock a user by user ID."""
+    r = _make_api_request("DELETE", f"/users/@me/relationships/{user_id}", token)
+    return r.status_code, get_clean_error(r)
+
 
 def block_user(token: str, user_id: str) -> tuple[int, str]:
     """Block a user by user ID."""
@@ -176,9 +197,9 @@ def block_user(token: str, user_id: str) -> tuple[int, str]:
 # ── API helpers (Read States) ─────────────────────────────────────────────
 
 
-def _get_read_states(token: str) -> list[str]:
-    """Connects to the Discord WS to extract all channel IDs from read_state, guilds, and private_channels."""
-    channel_ids = set()
+def _get_read_states(token: str) -> dict[str, list[str]]:
+    """Connects to the Discord WS to extract unread channel IDs grouped by server."""
+    grouped_channels = {}
     has_received_ready = False
     print("  [WS] Connecting to Discord Gateway to fetch your read states...")
 
@@ -193,33 +214,106 @@ def _get_read_states(token: str) -> list[str]:
                 has_received_ready = True
                 d = data.get("d")
                 if isinstance(d, dict):
-                    # 1. Grab read state entries
+                    # 1. Map read state entries
+                    read_map = {}
                     read_state = d.get("read_state")
                     if isinstance(read_state, dict) and "entries" in read_state:
                         for entry in read_state["entries"]:
                             if isinstance(entry, dict) and entry.get("id"):
-                                channel_ids.add(entry.get("id"))
+                                read_map[entry.get("id")] = {
+                                    "last_message_id": entry.get("last_message_id"),
+                                    "mention_count": entry.get("mention_count", 0)
+                                }
                     
+                    user_guild_settings = d.get("user_guild_settings", [])
+                    muted_guilds = set()
+                    muted_channels = set()
+                    unmuted_channels = set()
+                    
+                    if isinstance(user_guild_settings, list):
+                        for ugs in user_guild_settings:
+                            if not isinstance(ugs, dict): continue
+                            g_id = ugs.get("guild_id")
+                            if ugs.get("muted"):
+                                if g_id:
+                                    muted_guilds.add(g_id)
+                            
+                            overrides = ugs.get("channel_overrides", [])
+                            if isinstance(overrides, list):
+                                for override in overrides:
+                                    if not isinstance(override, dict): continue
+                                    c_id = override.get("channel_id")
+                                    if not c_id: continue
+                                    if override.get("muted"):
+                                        muted_channels.add(c_id)
+                                    elif "muted" in override and not override["muted"]:
+                                        unmuted_channels.add(c_id)
+
+                    def is_unread(channel_id, channel_last_msg_id, guild_id=None):
+                        if not channel_last_msg_id:
+                            return False # No messages to read
+                            
+                        state = read_map.get(channel_id, {})
+                        mention_count = state.get("mention_count", 0)
+                        
+                        if mention_count > 0:
+                            return True
+                            
+                        # If no mentions, check if muted
+                        is_muted = False
+                        if channel_id in muted_channels:
+                            is_muted = True
+                        elif guild_id and guild_id in muted_guilds and channel_id not in unmuted_channels:
+                            is_muted = True
+                            
+                        if is_muted:
+                            return False
+                            
+                        read_last_id = state.get("last_message_id", "0")
+                        
+                        try:
+                            # Compare as integers to handle massive message IDs in the future
+                            return int(read_last_id) < int(channel_last_msg_id)
+                        except (ValueError, TypeError):
+                            return read_last_id != channel_last_msg_id
+
                     # 2. Grab all channels and threads from guilds
                     guilds = d.get("guilds", [])
                     if isinstance(guilds, list):
                         for guild in guilds:
                             if isinstance(guild, dict):
+                                server_name = guild.get("properties", {}).get("name") or guild.get("name", "Unknown Server")
+                                g_id = guild.get("id")
+                                unread = []
                                 if "channels" in guild and isinstance(guild["channels"], list):
                                     for channel in guild["channels"]:
                                         if isinstance(channel, dict) and channel.get("id"):
-                                            channel_ids.add(channel.get("id"))
+                                            c_id = channel.get("id")
+                                            c_last_id = channel.get("last_message_id")
+                                            if is_unread(c_id, c_last_id, g_id):
+                                                unread.append(c_id)
                                 if "threads" in guild and isinstance(guild["threads"], list):
                                     for thread in guild["threads"]:
                                         if isinstance(thread, dict) and thread.get("id"):
-                                            channel_ids.add(thread.get("id"))
+                                            c_id = thread.get("id")
+                                            c_last_id = thread.get("last_message_id")
+                                            if is_unread(c_id, c_last_id, g_id):
+                                                unread.append(c_id)
+                                if unread:
+                                    grouped_channels[server_name] = unread
                                             
                     # 3. Grab all private channels
                     private_channels = d.get("private_channels", [])
                     if isinstance(private_channels, list):
+                        dm_unread = []
                         for pc in private_channels:
                             if isinstance(pc, dict) and pc.get("id"):
-                                channel_ids.add(pc.get("id"))
+                                c_id = pc.get("id")
+                                c_last_id = pc.get("last_message_id")
+                                if is_unread(c_id, c_last_id):
+                                    dm_unread.append(c_id)
+                        if dm_unread:
+                            grouped_channels["Direct Messages"] = dm_unread
                                 
                 print("  [WS] Successfully downloaded read states and channel lists.")
                 ws.close()
@@ -283,7 +377,7 @@ def _get_read_states(token: str) -> list[str]:
     if not has_received_ready:
         raise RuntimeError("Failed to receive READY payload from WebSocket. Connection aborted or failed.")
 
-    return list(channel_ids)
+    return grouped_channels
 
 
 def check_token(token: str) -> bool:
@@ -531,16 +625,21 @@ def mass_read_notifications(token: str) -> None:
     print("\nFetching your unread notifications…")
     
     try:
-        channel_ids = _get_read_states(token)
+        grouped_channels = _get_read_states(token)
     except RuntimeError as e:
         print(f"\n  ✗  {e}")
         return
 
-    if not channel_ids:
+    if not grouped_channels:
         print("No channels found to mark as read.")
         return
         
-    print(f"\nFound {len(channel_ids)} channel(s) to process.")
+    total_unread = sum(len(c) for c in grouped_channels.values())
+    if total_unread == 0:
+        print("No channels found to mark as read.")
+        return
+        
+    print(f"\nFound {total_unread} channel(s) to process.")
     
     confirm = input("Type 'yes' to mark ALL DMs and Servers as read: ").strip()
     if confirm.lower() != "yes":
@@ -553,53 +652,55 @@ def mass_read_notifications(token: str) -> None:
     future_ms = current_time_ms + 3600000
     massive_message_id = str((future_ms - 1420070400000) << 22)
 
-    read_states_payload = []
-    for c_id in channel_ids:
-        read_states_payload.append({
-            "channel_id": c_id,
-            "message_id": massive_message_id,
-            "read_state_type": 0
-        })
-
-    # Chunk the payload into batches of 100 to avoid payload size limits
-    chunk_size = 100
-    chunks = [read_states_payload[i:i + chunk_size] for i in range(0, len(read_states_payload), chunk_size)]
-    
     success_count = 0
     fail_count = 0
     
-    for i, chunk in enumerate(chunks):
-        payload = {"read_states": chunk}
-        print(f"\r  >  Sending bulk acknowledgment... ({i+1}/{len(chunks)} chunks)", end="", flush=True)
-        try:
-            r = _make_api_request("POST", "/read-states/ack-bulk", token, json=payload, quiet=True)
-            if r.status_code in (200, 204):
-                success_count += len(chunk)
-            else:
-                print(f"\n  ✗  Failed chunk (HTTP {r.status_code} - {get_clean_error(r)})")
-                fail_count += len(chunk)
-        except RuntimeError as e:
-            if "Cloudflare IP Ban" in str(e):
-                print("\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
-                return
-            print(f"  ✗  Runtime error: {e}")
-            fail_count += len(chunk)
-        except NetworkError as e:
-            print(f"  ✗  Network error: {e}")
-            fail_count += len(chunk)
-        except Exception as e:
-            print(f"  ✗  Failed: {e}")
-            fail_count += len(chunk)
+    for server_name, channel_ids in grouped_channels.items():
+        if not channel_ids:
+            continue
             
-        if len(chunks) > 1:
+        print(f"\n  >  Marking {server_name} as read...")
+        read_states_payload = []
+        for c_id in channel_ids:
+            read_states_payload.append({
+                "channel_id": c_id,
+                "message_id": massive_message_id,
+                "read_state_type": 0
+            })
+
+        # Chunk the payload into batches of 100 to avoid payload size limits
+        chunk_size = 100
+        chunks = [read_states_payload[i:i + chunk_size] for i in range(0, len(read_states_payload), chunk_size)]
+        
+        for i, chunk in enumerate(chunks):
+            payload = {"read_states": chunk}
+            print(f"\r     Sending bulk acknowledgment... ({i+1}/{len(chunks)} chunks)", end="", flush=True)
+            try:
+                r = _make_api_request("POST", "/read-states/ack-bulk", token, json=payload, quiet=True)
+                if r.status_code in (200, 204):
+                    success_count += len(chunk)
+                else:
+                    print(f"\n  ✗  Failed chunk (HTTP {r.status_code} - {get_clean_error(r)})")
+                    fail_count += len(chunk)
+            except RuntimeError as e:
+                if "Cloudflare IP Ban" in str(e):
+                    print("\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
+                    return
+                print(f"  ✗  Runtime error: {e}")
+                fail_count += len(chunk)
+            except NetworkError as e:
+                print(f"  ✗  Network error: {e}")
+                fail_count += len(chunk)
+            except Exception as e:
+                print(f"  ✗  Exception: {e}")
+                fail_count += len(chunk)
             time.sleep(REQUEST_DELAY)
 
-    print()  # newline after progress bar
+    print("\n")  # newline after progress bar
     if fail_count == 0:
         print(f"  ✓  Success! All {success_count} notifications have been marked as read.")
     else:
         print(f"Done — marked read {success_count}, failed {fail_count}.")
-
 
 def get_masked_input(prompt: str = "Paste token: ", mask: str = "*") -> str:
     """A cross-platform masked input that correctly handles Ctrl+C."""

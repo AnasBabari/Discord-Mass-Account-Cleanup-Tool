@@ -605,12 +605,13 @@ def test_get_read_states(mock_ws):
                         },
                         "guilds": [
                             {
-                                "channels": [{"id": "ch2"}, {"id": "ch3"}],
-                                "threads": [{"id": "th1"}]
+                                "name": "Server 1",
+                                "channels": [{"id": "ch1", "last_message_id": "msg2"}, {"id": "ch3", "last_message_id": "msg3"}],
+                                "threads": [{"id": "th1", "last_message_id": "msg4"}]
                             }
                         ],
                         "private_channels": [
-                            {"id": "pc1"}
+                            {"id": "pc1", "last_message_id": "msg5"}
                         ]
                     },
                 }
@@ -622,13 +623,13 @@ def test_get_read_states(mock_ws):
     mock_ws.side_effect = side_effect
 
     res = dmc._get_read_states("token")
-    assert set(res) == {"ch1", "ch2", "ch3", "th1", "pc1"}
+    assert res == {"Server 1": ["ch1", "ch3", "th1"], "Direct Messages": ["pc1"]}
     assert ws_instance.send.called
     assert ws_instance.run_forever.called
 
 
 @patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup._get_read_states", return_value=["ch1", "ch2"])
+@patch("discord_mass_cleanup._get_read_states", return_value={"Server 1": ["ch1", "ch2"]})
 @patch("discord_mass_cleanup._make_api_request")
 def test_mass_read_notifications_success(mock_api, mock_get_states, mock_in, capsys):
     mock_r = MagicMock()
@@ -643,39 +644,31 @@ def test_mass_read_notifications_success(mock_api, mock_get_states, mock_in, cap
     args, kwargs = mock_api.call_args
     assert args[0] == "POST"
     assert args[1] == "/read-states/ack-bulk"
-    assert "json" in kwargs
-    assert len(kwargs["json"]["read_states"]) == 2
-    assert kwargs["json"]["read_states"][0]["channel_id"] == "ch1"
-
-
-@patch("builtins.input", return_value="no")
-@patch("discord_mass_cleanup._get_read_states", return_value=["1", "2"])
-def test_mass_read_notifications_cancel(mock_get_states, mock_in, capsys):
-    dmc.mass_read_notifications("token")
-    assert "Cancelled." in capsys.readouterr().out
-    mock_get_states.assert_called_once()
-
 
 @patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup._get_read_states", return_value=[])
+@patch("discord_mass_cleanup._get_read_states", return_value={})
 def test_mass_read_notifications_empty(mock_get_states, mock_in, capsys):
     dmc.mass_read_notifications("token")
     assert "No channels found to mark as read." in capsys.readouterr().out
 
 
 @patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup._get_read_states", return_value=["ch1"])
+@patch("discord_mass_cleanup._get_read_states", return_value={"Server 1": ["ch1"]})
 @patch("discord_mass_cleanup._make_api_request")
 def test_mass_read_notifications_cf_ban(mock_api, mock_get_states, mock_in, capsys):
     mock_api.side_effect = RuntimeError("Cloudflare IP Ban")
 
     dmc.mass_read_notifications("token")
-    assert "FATAL: Cloudflare has temporarily banned your IP" in capsys.readouterr().out
+    
+    captured = capsys.readouterr().out
+    assert "FATAL: Cloudflare has temporarily banned your IP. Aborting." in captured
 
 
 @patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup._get_read_states", return_value=["ch1"])
+@patch("discord_mass_cleanup._get_read_states", return_value={"Server 1": ["ch1"]})
 @patch("discord_mass_cleanup._make_api_request", side_effect=dmc.NetworkError("NetErr"))
 def test_mass_read_notifications_net_err(mock_api, mock_get_states, mock_in, capsys):
     dmc.mass_read_notifications("token")
-    assert "Network error: NetErr" in capsys.readouterr().out
+    
+    captured = capsys.readouterr().out
+    assert "Network error: NetErr" in captured

@@ -10,6 +10,7 @@ from ui.components import ToastOverlay
 from ui.pages.login import LoginPage
 from ui.pages.servers import ServersPage
 from ui.pages.friends import FriendsPage
+from ui.pages.blocked import BlockedPage
 from ui.pages.notifications import NotificationsPage
 from ui.pages.logs import LogsPage
 from workers import LoginWorker
@@ -106,6 +107,7 @@ class MainWindow(QMainWindow):
         nav_items = [
             ("Servers",       'fa5s.server',       "servers"),
             ("Friends",       'mdi.account-multiple',  "friends"),
+            ("Blocked",       'fa5s.user-slash',       "blocked"),
             ("Notifications", 'fa5s.bell',          "notifications"),
             ("Terminal",      'fa5s.terminal',      "logs")
         ]
@@ -197,6 +199,11 @@ class MainWindow(QMainWindow):
         self.friends_page.action_finished.connect(lambda: self.toast.show_message("Friend action completed."))
         self.pages.addWidget(self.friends_page)
 
+        self.blocked_page = BlockedPage()
+        self.blocked_page.log_msg_signal.connect(self.log_msg)
+        self.blocked_page.action_finished.connect(lambda: self.toast.show_message("Users Unblocked Successfully", msg_type="success"))
+        self.pages.addWidget(self.blocked_page)
+
         self.notifications_page = NotificationsPage()
         self.notifications_page.log_msg_signal.connect(self.log_msg)
         self.notifications_page.action_finished.connect(lambda msg, mtype: self.toast.show_message(msg, msg_type=mtype))
@@ -214,6 +221,14 @@ class MainWindow(QMainWindow):
         sys.stderr = self.stderr_interceptor
         
         self.toast = ToastOverlay(self)
+        
+        def my_excepthook(type, value, tback):
+            import os, traceback
+            os.makedirs('scratch', exist_ok=True)
+            with open('scratch/crash.log', 'w') as f:
+                f.write(''.join(traceback.format_exception(type, value, tback)))
+            sys.__excepthook__(type, value, tback)
+        sys.excepthook = my_excepthook
         
         self.set_authenticated(False)
         self.switch_page("login")
@@ -241,6 +256,7 @@ class MainWindow(QMainWindow):
             nav_icons = {
                 "servers": 'fa5s.server',
                 "friends": 'mdi.account-multiple',
+                "blocked": 'fa5s.user-slash',
                 "notifications": 'fa5s.bell',
                 "logs": 'fa5s.terminal'
             }
@@ -248,7 +264,7 @@ class MainWindow(QMainWindow):
                 color = ACCENT if is_active else TEXT_SECONDARY
                 btn.setIcon(qta.icon(nav_icons[name], color=color))
             
-        page_index = {"login": 0, "servers": 1, "friends": 2, "notifications": 3, "logs": 4}.get(ref, 0)
+        page_index = {"login": 0, "servers": 1, "friends": 2, "blocked": 3, "notifications": 4, "logs": 5}.get(ref, 0)
         self.pages.setCurrentIndex(page_index)
 
     def log_msg(self, message, msg_type="info"):
@@ -271,12 +287,12 @@ class MainWindow(QMainWindow):
         self.login_page.set_loading(True)
         self.login_page.set_status("")
         
-        self.login_worker = LoginWorker(token)
+        self.login_worker = LoginWorker(token, save=save)
         self.login_worker.finished.connect(self.login_worker.deleteLater)
-        self.login_worker.result_signal.connect(lambda s, m, t: self.on_login_result(s, m, t, save))
+        self.login_worker.result_signal.connect(self.on_login_result)
         self.login_worker.start()
 
-    def on_login_result(self, success, message, token, save):
+    def on_login_result(self, success, message, raw_username, token, avatar_bytes, save):
         self.login_page.set_loading(False)
         
         if not success:
@@ -292,13 +308,42 @@ class MainWindow(QMainWindow):
         self.account_name = message
         self.account_name_label.setText(self.account_name)
         if self.account_name:
-            self.account_avatar.setText(self.account_name[0].upper())
-            self.setWindowTitle(f"Cleanup Tool — {self.account_name}")
+            if avatar_bytes:
+                from PyQt5.QtGui import QPixmap, QPainter, QPainterPath
+                from PyQt5.QtCore import Qt
+                pixmap = QPixmap()
+                if pixmap.loadFromData(avatar_bytes):
+                    pixmap = pixmap.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    
+                    # Create circular mask
+                    rounded = QPixmap(24, 24)
+                    rounded.fill(Qt.transparent)
+                    painter = QPainter(rounded)
+                    painter.setRenderHint(QPainter.Antialiasing)
+                    path = QPainterPath()
+                    path.addEllipse(0, 0, 24, 24)
+                    painter.setClipPath(path)
+                    painter.drawPixmap(0, 0, pixmap)
+                    painter.end()
+                    
+                    self.account_avatar.setStyleSheet("background-color: transparent;")
+                    self.account_avatar.setPixmap(rounded)
+                    self.account_avatar.setText("")
+                else:
+                    self.account_avatar.setStyleSheet(f"background-color: {ACCENT}; color: {BG_DARKEST}; border-radius: 12px; font-weight: 700; font-size: 11px;")
+                    self.account_avatar.setText(self.account_name[0].upper() if self.account_name else "?")
+                    self.account_avatar.setPixmap(QPixmap())
+            else:
+                self.account_avatar.setStyleSheet(f"background-color: {ACCENT}; color: {BG_DARKEST}; border-radius: 12px; font-weight: 700; font-size: 11px;")
+                self.account_avatar.setText(self.account_name[0].upper() if self.account_name else "?")
+                self.account_avatar.setPixmap(QPixmap())
+            self.setWindowTitle(f"Cleanup Tool - {self.account_name}")
         self.toast.show_message(f"Logged in as {self.account_name}", msg_type="success")
         self.token = token
         self.servers_page.set_token(token)
         self.friends_page.set_token(token)
         self.notifications_page.set_token(token)
+        self.blocked_page.set_token(token)
 
         if save:
             self.log_msg("Writing token to secure storage...", "debug")
@@ -313,12 +358,15 @@ class MainWindow(QMainWindow):
         
         self.servers_page.fetch_data()
         self.friends_page.fetch_data()
+        self.blocked_page.fetch_data()
 
     def logout(self):
         self.token = ""
         self.account_name = ""
         self.account_name_label.setText("")
+        self.account_avatar.setStyleSheet(f"background-color: {ACCENT}; color: {BG_DARKEST}; border-radius: 12px; font-weight: 700; font-size: 11px;")
         self.account_avatar.setText("?")
+        self.account_avatar.setPixmap(QPixmap())
         self.setWindowTitle("Discord Mass Account Cleanup Tool")
         try:
             keyring.delete_password(SERVICE_ID, KEY_ID)

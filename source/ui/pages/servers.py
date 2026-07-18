@@ -4,7 +4,7 @@ from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
 from ui.theme import *
 from ui.components import SectionHeader, StatBadge, LoadingOverlay, get_length_str
-from workers import FetchServersWorker, LeaveServersWorker, FetchJoinedAtWorker
+from workers import FetchServersWorker, LeaveServersWorker
 
 class ServersPage(QWidget):
     log_msg_signal = pyqtSignal(str, str)
@@ -128,38 +128,11 @@ class ServersPage(QWidget):
             self.empty_label.setText("No leavable servers found.")
             self.table_stack.setCurrentIndex(1)
         else:
-            # Populate table but stay on loading splash while fetching member dates
+            # Populate table and reveal immediately (no member data fetching)
             self.populate_table()
-            self.loading_overlay.set_status("Fetching member data...")
-            self.loading_overlay.set_detail(f"0 / {len(self.servers_data)} servers")
-            
-            self.joined_at_worker = FetchJoinedAtWorker(self.token, self.servers_data)
-            self.joined_at_worker.joined_at_signal.connect(self.on_joined_at_fetched)
-            self.joined_at_worker.progress_signal.connect(self.on_joined_at_progress)
-            self.joined_at_worker.finished_signal.connect(self.on_joined_at_finished)
-            self.joined_at_worker.start()
+            self.table_stack.setCurrentIndex(0)
 
-    def on_joined_at_progress(self, current, total):
-        self.loading_overlay.set_detail(f"{current} / {total} servers")
 
-    def on_joined_at_fetched(self, guild_id, joined_at):
-        for row in range(self.servers_table.rowCount()):
-            if self.servers_table.item(row, 2).text() == guild_id:
-                if joined_at:
-                    length = get_length_str(guild_id, joined_at)
-                    tooltip = f"Joined {joined_at}"
-                else:
-                    length = get_length_str(guild_id, None)
-                    tooltip = "Derived from Server ID"
-                item = self.servers_table.item(row, 3)
-                item.setText(length)
-                item.setToolTip(tooltip)
-                break
-
-    def on_joined_at_finished(self):
-        self.log_msg_signal.emit("Member data loaded.", "success")
-        # Reveal the populated table
-        self.table_stack.setCurrentIndex(0)
 
     def populate_table(self):
         self.servers_table.setSortingEnabled(False)
@@ -179,7 +152,9 @@ class ServersPage(QWidget):
 
             self.servers_table.setItem(row, 2, QTableWidgetItem(g['id']))
 
-            member_since_item = QTableWidgetItem("—")
+            length = get_length_str(g['id'], None)
+            member_since_item = QTableWidgetItem(length)
+            member_since_item.setToolTip("Derived from Server ID")
             member_since_item.setForeground(QBrush(QColor(TEXT_DIM)))
             member_since_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             self.servers_table.setItem(row, 3, member_since_item)

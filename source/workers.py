@@ -3,30 +3,53 @@ from PyQt5.QtCore import QThread, pyqtSignal
 import discord_mass_cleanup as dmc
 
 class LoginWorker(QThread):
-    result_signal = pyqtSignal(bool, str, str) # success, message, token
-    def __init__(self, token):
+    result_signal = pyqtSignal(bool, str, str, str, bytes, bool) # success, message, raw_username, token, avatar_bytes, save
+    def __init__(self, token, save=True):
         super().__init__()
         self.token = token
+        self.save = save
     def run(self):
         if not self.token:
-            self.result_signal.emit(False, "No token provided", self.token)
+            self.result_signal.emit(False, "No token provided", "", self.token, b"", self.save)
             return
         try:
             r = dmc._make_api_request("GET", "/users/@me", self.token, max_retries=1)
             if r.status_code == 401:
-                self.result_signal.emit(False, "INVALID TOKEN", self.token)
+                self.result_signal.emit(False, "INVALID TOKEN", "", self.token, b"", self.save)
                 return
             r.raise_for_status()
             try:
                 user = r.json()
             except ValueError:
-                self.result_signal.emit(False, "Invalid response from Discord", self.token)
+                self.result_signal.emit(False, "Invalid response from Discord", "", self.token, b"", self.save)
                 return
             display = user.get("global_name") or user.get("username")
             username = user.get("username")
-            self.result_signal.emit(True, f"{display} (@{username})", self.token)
+            user_id = user.get("id")
+            avatar_hash = user.get("avatar")
+            
+            avatar_bytes = b""
+            if user_id:
+                if avatar_hash:
+                    avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64"
+                else:
+                    try:
+                        index = (int(user_id) >> 22) % 6
+                    except Exception:
+                        index = 0
+                    avatar_url = f"https://cdn.discordapp.com/embed/avatars/{index}.png"
+                
+                try:
+                    import requests
+                    av_r = requests.get(avatar_url, timeout=10)
+                    if av_r.status_code == 200:
+                        avatar_bytes = av_r.content
+                except Exception:
+                    pass
+
+            self.result_signal.emit(True, display, username, self.token, avatar_bytes, self.save)
         except Exception as e:
-            self.result_signal.emit(False, str(e), self.token)
+            self.result_signal.emit(False, str(e), "", self.token, b"", self.save)
 
 class FetchServersWorker(QThread):
     result_signal = pyqtSignal(list, str)
@@ -43,29 +66,7 @@ class FetchServersWorker(QThread):
         except Exception as e:
             self.result_signal.emit([], str(e))
 
-class FetchJoinedAtWorker(QThread):
-    joined_at_signal = pyqtSignal(str, str)
-    progress_signal = pyqtSignal(int, int)  # current, total
-    finished_signal = pyqtSignal()
-    def __init__(self, token, guilds):
-        super().__init__()
-        self.token = token
-        self.guilds = guilds
-    def run(self):
-        total = len(self.guilds)
-        for i, g in enumerate(self.guilds):
-            try:
-                r = dmc._make_api_request("GET", f"/users/@me/guilds/{g['id']}/member", self.token)
-                if r.status_code == 200:
-                    joined_at = r.json().get("joined_at", "")
-                    self.joined_at_signal.emit(g['id'], joined_at)
-                else:
-                    self.joined_at_signal.emit(g['id'], "")
-            except Exception:
-                self.joined_at_signal.emit(g['id'], "")
-            self.progress_signal.emit(i + 1, total)
-            time.sleep(0.25)  # Read-only GET — safe with shorter delay
-        self.finished_signal.emit()
+
 
 class FetchFriendsWorker(QThread):
     result_signal = pyqtSignal(list, str)
@@ -134,6 +135,47 @@ class BlockUsersWorker(QThread):
             time.sleep(dmc.REQUEST_DELAY)
         self.finished_signal.emit(success, failed)
 
+class FetchBlockedWorker(QThread):
+    result_signal = pyqtSignal(list, str)
+    def __init__(self, token):
+        super().__init__()
+        self.token = token
+    def run(self):
+        if not self.token:
+            self.result_signal.emit([], "No token provided")
+            return
+        try:
+            blocked = dmc.get_blocked_users(self.token)
+            self.result_signal.emit(blocked, "")
+        except Exception as e:
+            self.result_signal.emit([], str(e))
+
+class UnblockUsersWorker(QThread):
+    progress_signal = pyqtSignal(int, str)
+    finished_signal = pyqtSignal(int, int)
+    def __init__(self, token, users_to_unblock):
+        super().__init__()
+        self.token = token
+        self.users_to_unblock = users_to_unblock
+    def run(self):
+        success = 0
+        failed = 0
+        for i, u in enumerate(self.users_to_unblock):
+            display = u.get("name", "Unknown")
+            try:
+                status, text = dmc.unblock_user(self.token, u["id"])
+                if status == 204:
+                    success += 1
+                    self.progress_signal.emit(i+1, f"[+] UNBLOCKED: {display}")
+                else:
+                    failed += 1
+                    self.progress_signal.emit(i+1, f"[-] FAILED: {display} ({text})")
+            except Exception as e:
+                failed += 1
+                self.progress_signal.emit(i+1, f"[-] FAILED: {display} ({e})")
+            time.sleep(dmc.REQUEST_DELAY)
+        self.finished_signal.emit(success, failed)
+
 class LeaveServersWorker(QThread):
     progress_signal = pyqtSignal(int, str)
     finished_signal = pyqtSignal(int, int)
@@ -167,34 +209,46 @@ class ReadNotifsWorker(QThread):
         self.token = token
     def run(self):
         try:
-            channel_ids = dmc._get_read_states(self.token)
-            if not channel_ids:
-                self.finished_signal.emit(0, 0, "No active channels found.")
+            grouped_channels = dmc._get_read_states(self.token)
+            if not grouped_channels:
+                self.finished_signal.emit(0, 0, "No unread channels found.")
                 return
-            self.progress_signal.emit(f"[*] Acknowledging {len(channel_ids)} channels...")
+            
+            total_unread = sum(len(c) for c in grouped_channels.values())
+            if total_unread == 0:
+                self.finished_signal.emit(0, 0, "")
+                return
+                
+            self.progress_signal.emit(f"[*] Found {total_unread} unread channels across {len(grouped_channels)} servers/DMs.")
             
             current_time_ms = int(time.time() * 1000)
             future_ms = current_time_ms + 3600000
             massive_message_id = str((future_ms - 1420070400000) << 22)
 
-            read_states_payload = [{"channel_id": c, "message_id": massive_message_id, "read_state_type": 0} for c in channel_ids]
-            chunk_size = 100
-            chunks = [read_states_payload[i:i + chunk_size] for i in range(0, len(read_states_payload), chunk_size)]
-            
             success_count = 0
             fail_count = 0
             
-            for chunk in chunks:
-                try:
-                    r = dmc._make_api_request("POST", "/read-states/ack-bulk", self.token, json={"read_states": chunk}, quiet=True)
-                    if r.status_code in (200, 204):
-                        success_count += len(chunk)
-                    else:
+            for server_name, channel_ids in grouped_channels.items():
+                if not channel_ids:
+                    continue
+                
+                self.progress_signal.emit(f"[*] Marking {server_name} as read...")
+                read_states_payload = [{"channel_id": c, "message_id": massive_message_id, "read_state_type": 0} for c in channel_ids]
+                
+                chunk_size = 100
+                chunks = [read_states_payload[i:i + chunk_size] for i in range(0, len(read_states_payload), chunk_size)]
+                
+                for chunk in chunks:
+                    try:
+                        r = dmc._make_api_request("POST", "/read-states/ack-bulk", self.token, json={"read_states": chunk}, quiet=True)
+                        if r.status_code in (200, 204):
+                            success_count += len(chunk)
+                        else:
+                            fail_count += len(chunk)
+                    except Exception as e:
                         fail_count += len(chunk)
-                except Exception as e:
-                    fail_count += len(chunk)
-                    self.progress_signal.emit(f"[-] Chunk failed: {e}")
-                time.sleep(dmc.REQUEST_DELAY)
+                        self.progress_signal.emit(f"[-] Chunk failed for {server_name}: {e}")
+                    time.sleep(dmc.REQUEST_DELAY)
                 
             self.finished_signal.emit(success_count, fail_count, "")
         except Exception as e:

@@ -265,9 +265,37 @@ QMenu {
 }
 QTableView::indicator {
     subcontrol-position: center;
-}
-QCheckBox::indicator:checked, QTableView::indicator:checked {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #1e3a5f;
     border-radius: 4px;
+    background-color: transparent;
+}
+QTableView::indicator:hover {
+    border: 2px solid #38bdf8;
+    background-color: rgba(56, 189, 248, 0.05);
+}
+QTableView::indicator:checked {
+    background-color: #38bdf8;
+    border: 2px solid #38bdf8;
+    image: url("ASSETS_DIR/check.svg");
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #1e3a5f;
+    border-radius: 4px;
+    background-color: transparent;
+}
+QCheckBox::indicator:hover {
+    border: 2px solid #38bdf8;
+    background-color: rgba(56, 189, 248, 0.05);
+}
+QCheckBox::indicator:checked {
+    background-color: #38bdf8;
+    border: 2px solid #38bdf8;
+    image: url("ASSETS_DIR/check.svg");
 }
 QMenu::item {
     padding: 8px 24px 8px 12px;
