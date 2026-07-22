@@ -468,6 +468,22 @@ def test_make_api_request_timeout(mock_responses):
         dmc._make_api_request("GET", "/users/@me/guilds", "token", max_retries=2)
 
 
+def test_is_timeout_error_true():
+    assert dmc._is_timeout_error(requests.Timeout("request timed out")) is True
+
+
+def test_is_timeout_error_false():
+    assert dmc._is_timeout_error(requests.RequestException("connection error")) is False
+
+
+def test_make_api_request_non_timeout_error(mock_responses):
+    mock_responses.add(
+        responses.GET, f"{BASE_URL}/users/@me/guilds", body=requests.ConnectionError("Connection failed")
+    )
+    with pytest.raises(requests.RequestException, match="Connection failed"):
+        dmc._make_api_request("GET", "/users/@me/guilds", "token", max_retries=2)
+
+
 def test_get_clean_error_html():
     r = MagicMock()
     r.text = "<html>1015 Cloudflare block</html>"
