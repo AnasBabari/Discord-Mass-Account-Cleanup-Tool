@@ -13,7 +13,7 @@ class LoginWorker(QThread):
             self.result_signal.emit(False, "No token provided", "", self.token, b"", self.save)
             return
         try:
-            r = dmc._make_api_request("GET", "/users/@me", self.token, max_retries=1)
+            r = dmc._make_api_request("GET", "/users/@me", self.token, max_retries=2)
             if r.status_code == 401:
                 self.result_signal.emit(False, "INVALID TOKEN", "", self.token, b"", self.save)
                 return
@@ -49,7 +49,7 @@ class LoginWorker(QThread):
 
             self.result_signal.emit(True, display, username, self.token, avatar_bytes, self.save)
         except Exception as e:
-            self.result_signal.emit(False, str(e), "", self.token, b"", self.save)
+            self.result_signal.emit(False, f"NETWORK ERROR: {e}", "", self.token, b"", self.save)
 
 class FetchServersWorker(QThread):
     result_signal = pyqtSignal(list, str)
@@ -90,10 +90,17 @@ class RemoveFriendsWorker(QThread):
         super().__init__()
         self.token = token
         self.friends_to_remove = friends_to_remove
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
     def run(self):
         success = 0
         failed = 0
         for i, f in enumerate(self.friends_to_remove):
+            if self._is_cancelled:
+                break
             display = f["user"].get("global_name") or f["user"].get("username", "Unknown")
             try:
                 status, text = dmc.remove_friend(self.token, f["id"])
@@ -116,10 +123,17 @@ class BlockUsersWorker(QThread):
         super().__init__()
         self.token = token
         self.users_to_block = users_to_block
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
     def run(self):
         success = 0
         failed = 0
         for i, u in enumerate(self.users_to_block):
+            if self._is_cancelled:
+                break
             display = u["user"].get("global_name") or u["user"].get("username", "Unknown")
             try:
                 status, text = dmc.block_user(self.token, u["id"])
@@ -157,10 +171,17 @@ class UnblockUsersWorker(QThread):
         super().__init__()
         self.token = token
         self.users_to_unblock = users_to_unblock
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
     def run(self):
         success = 0
         failed = 0
         for i, u in enumerate(self.users_to_unblock):
+            if self._is_cancelled:
+                break
             display = u.get("name", "Unknown")
             try:
                 status, text = dmc.unblock_user(self.token, u["id"])
@@ -183,10 +204,17 @@ class LeaveServersWorker(QThread):
         super().__init__()
         self.token = token
         self.servers_to_leave = servers_to_leave
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
     def run(self):
         success = 0
         failed = 0
         for i, g in enumerate(self.servers_to_leave):
+            if self._is_cancelled:
+                break
             try:
                 status, text = dmc.leave_guild(self.token, g["id"])
                 if status == 204:
@@ -207,6 +235,11 @@ class ReadNotifsWorker(QThread):
     def __init__(self, token):
         super().__init__()
         self.token = token
+        self._is_cancelled = False
+
+    def cancel(self):
+        self._is_cancelled = True
+
     def run(self):
         try:
             grouped_channels = dmc._get_read_states(self.token)
@@ -229,6 +262,8 @@ class ReadNotifsWorker(QThread):
             fail_count = 0
             
             for server_name, channel_ids in grouped_channels.items():
+                if self._is_cancelled:
+                    break
                 if not channel_ids:
                     continue
                 
@@ -239,6 +274,8 @@ class ReadNotifsWorker(QThread):
                 chunks = [read_states_payload[i:i + chunk_size] for i in range(0, len(read_states_payload), chunk_size)]
                 
                 for chunk in chunks:
+                    if self._is_cancelled:
+                        break
                     try:
                         r = dmc._make_api_request("POST", "/read-states/ack-bulk", self.token, json={"read_states": chunk}, quiet=True)
                         if r.status_code in (200, 204):

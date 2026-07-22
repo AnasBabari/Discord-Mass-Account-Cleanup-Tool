@@ -31,11 +31,32 @@ class StreamInterceptor(QObject):
     def flush(self): pass
 
 class MainWindow(QMainWindow):
+    def track_worker(self, worker):
+        self._active_workers.add(worker)
+        worker.finished.connect(lambda: self._active_workers.discard(worker))
+        worker.finished.connect(worker.deleteLater)
+        return worker
+
     def __init__(self):
         super().__init__()
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         self._original_excepthook = sys.excepthook
+        self._active_workers = set()
+        
+        def my_excepthook(type, value, tback):
+            import traceback, re
+            crash_dir = os.path.join(tempfile.gettempdir(), "discord-mass-cleanup-tool")
+            os.makedirs(crash_dir, exist_ok=True)
+            crash_path = os.path.join(crash_dir, "crash.log")
+            raw_text = ''.join(traceback.format_exception(type, value, tback))
+            # Redact Discord Authorization token patterns
+            sanitized_text = re.sub(r'([A-Za-z0-9_-]{24,28}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38})', '[REDACTED_TOKEN]', raw_text)
+            sanitized_text = re.sub(r'("Authorization":\s*")[^"]+(")', r'\1[REDACTED_TOKEN]\2', sanitized_text)
+            with open(crash_path, 'w', encoding='utf-8') as f:
+                f.write(sanitized_text)
+            self._original_excepthook(type, value, tback)
+        sys.excepthook = my_excepthook
         self.setWindowTitle("Discord Mass Account Cleanup Tool")
         self.resize(1100, 750)
         self.setMinimumSize(900, 600)
@@ -227,16 +248,7 @@ class MainWindow(QMainWindow):
         
         self.toast = ToastOverlay(self)
         
-        def my_excepthook(type, value, tback):
-            import traceback
-            crash_dir = os.path.join(tempfile.gettempdir(), "discord-mass-cleanup-tool")
-            os.makedirs(crash_dir, exist_ok=True)
-            crash_path = os.path.join(crash_dir, "crash.log")
-            with open(crash_path, 'w', encoding='utf-8') as f:
-                f.write(''.join(traceback.format_exception(type, value, tback)))
-            self._original_excepthook(type, value, tback)
-        sys.excepthook = my_excepthook
-        
+
         self.set_authenticated(False)
         self.switch_page("login")
         
@@ -294,8 +306,7 @@ class MainWindow(QMainWindow):
         self.login_page.set_loading(True)
         self.login_page.set_status("")
         
-        self.login_worker = LoginWorker(token, save=save)
-        self.login_worker.finished.connect(self.login_worker.deleteLater)
+        self.login_worker = self.track_worker(LoginWorker(token, save=save))
         self.login_worker.result_signal.connect(self.on_login_result)
         self.login_worker.start()
 
@@ -305,10 +316,12 @@ class MainWindow(QMainWindow):
         if not success:
             self.log_msg(f"AUTH FAILED: {message}", "error")
             self.login_page.set_status(f"Authentication failed: {message}")
-            try:
-                keyring.delete_password(SERVICE_ID, KEY_ID)
-            except Exception:
-                pass
+            if message == "INVALID TOKEN" or "INVALID" in message:
+                try:
+                    keyring.delete_password(SERVICE_ID, KEY_ID)
+                    self.log_msg("Invalid token purged from keyring.", "warning")
+                except Exception:
+                    pass
             return
             
         self.log_msg(f"AUTH OK: {message}", "success")
@@ -389,6 +402,11 @@ class MainWindow(QMainWindow):
         self.log_msg("Session closed.")
 
     def closeEvent(self, event):
+        for worker in list(self._active_workers):
+            if hasattr(worker, "cancel"):
+                worker.cancel()
+            if worker.isRunning():
+                worker.wait(1000)
         sys.stdout = self._original_stdout
         sys.stderr = self._original_stderr
         sys.excepthook = self._original_excepthook

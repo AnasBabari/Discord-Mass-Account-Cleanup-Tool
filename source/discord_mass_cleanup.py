@@ -80,6 +80,14 @@ def _make_api_request(
                 time.sleep(2)
                 continue
             raise
+        except Exception as e:
+            if _is_timeout_error(e):
+                if not quiet:
+                    print("  ⏳  Request timed out — retrying…")
+                retries += 1
+                time.sleep(2)
+                continue
+            raise
 
         if r.status_code == 429:
             if "<html" in r.text.lower():
@@ -225,6 +233,11 @@ def _get_read_states(token: str) -> dict[str, list[str]]:
         nonlocal has_received_ready
         try:
             data = json.loads(message)
+        except json.JSONDecodeError as e:
+            print(f"  [WS] Warning: Malformed JSON packet ignored: {e}")
+            return
+
+        try:
             if data.get("op") == 9:
                 print("  [WS] Invalid session! Token might be bad or WS blocked.")
                 ws.close()
@@ -251,8 +264,8 @@ def _get_read_states(token: str) -> dict[str, list[str]]:
                     if isinstance(user_guild_settings, list):
                         for ugs in user_guild_settings:
                             if not isinstance(ugs, dict): continue
-                            g_id = ugs.get("guild_id")
                             if ugs.get("muted"):
+                                g_id = ugs.get("guild_id")
                                 if g_id:
                                     muted_guilds.add(g_id)
                             
@@ -274,33 +287,27 @@ def _get_read_states(token: str) -> dict[str, list[str]]:
                         state = read_map.get(channel_id, {})
                         mention_count = state.get("mention_count", 0)
                         
-                        if mention_count > 0:
-                            return True
-                            
-                        # If no mentions, check if muted
-                        is_muted = False
-                        if channel_id in muted_channels:
-                            is_muted = True
-                        elif guild_id and guild_id in muted_guilds and channel_id not in unmuted_channels:
-                            is_muted = True
-                            
-                        if is_muted:
-                            return False
-                            
-                        read_last_id = state.get("last_message_id", "0")
-                        
-                        try:
-                            # Compare as integers to handle massive message IDs in the future
-                            return int(read_last_id) < int(channel_last_msg_id)
-                        except (ValueError, TypeError):
-                            return read_last_id != channel_last_msg_id
+                        if channel_id in unmuted_channels:
+                            pass # Channel is explicitly unmuted
+                        elif channel_id in muted_channels:
+                            return False # Channel is explicitly muted
+                        elif guild_id and guild_id in muted_guilds:
+                            return False # Parent guild is muted
 
-                    # 2. Grab all channels and threads from guilds
+                        read_last_id = state.get("last_message_id")
+                        if not read_last_id:
+                            return True
+                        try:
+                            return mention_count > 0 or int(channel_last_msg_id) > int(read_last_id)
+                        except (ValueError, TypeError):
+                            return channel_last_msg_id != read_last_id
+
+                    # 2. Iterate guilds and their channels/threads
                     guilds = d.get("guilds", [])
                     if isinstance(guilds, list):
                         for guild in guilds:
                             if isinstance(guild, dict):
-                                server_name = guild.get("properties", {}).get("name") or guild.get("name", "Unknown Server")
+                                server_name = guild.get("properties", {}).get("name") or guild.get("name") or "Unknown Server"
                                 g_id = guild.get("id")
                                 unread = []
                                 if "channels" in guild and isinstance(guild["channels"], list):
