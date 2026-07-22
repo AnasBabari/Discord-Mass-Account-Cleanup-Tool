@@ -272,7 +272,7 @@ def test_mass_leave_servers_all_owned(mock_get_guilds, mock_input, capsys):
     mock_get_guilds.return_value = [{"id": "2", "name": "Owned 1", "owner": True}]
     dmc.mass_leave_servers("token")
     captured = capsys.readouterr().out
-    assert "You own all your servers — nothing to leave." in captured
+    assert "You own all servers. No action needed." in captured
 
 
 @patch("builtins.input")

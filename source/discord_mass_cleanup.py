@@ -231,7 +231,7 @@ def _get_read_states(token: str) -> dict[str, list[str]]:
     """
     grouped_channels = {}
     has_received_ready = False
-    print("  [WS] Connecting to Discord Gateway to fetch your read states...")
+    print("  [WS] Fetching read states via Discord Gateway...")
 
     def on_message(ws, message):
         nonlocal has_received_ready
@@ -488,7 +488,7 @@ def mass_leave_servers(token: str) -> None:
     )
 
     if not leavable:
-        print("You own all your servers — nothing to leave.")
+        print("You own all servers. No action needed.")
         return
 
     col_w = max(len(g["name"]) for g in leavable) + 2
@@ -520,14 +520,14 @@ def mass_leave_servers(token: str) -> None:
             indices = parse_selection(raw, len(leavable))
             selected = [leavable[i - 1] for i in indices]
         except ValueError:
-            print("Invalid input — use numbers, ranges (e.g. 2-5), or 'all'.")
+            print("Invalid input. Use numbers, ranges (e.g., 2-5), or 'all'.")
             return
 
     if not selected:
         print("Nothing selected.")
         return
 
-    print(f"\nAbout to leave {len(selected)} server(s):\n")
+    print(f"\nLeaving {len(selected)} server(s):\n")
     for g in selected:
         print(f"  –  {g['name']}")
 
