@@ -1,9 +1,11 @@
 # pyrefly: ignore[missing-import]
 import sys
+import os
+import tempfile
 import keyring
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QStackedWidget, QFrame
 from PyQt5.QtCore import Qt, QTimer, QSize, QObject, pyqtSignal
-from PyQt5.QtGui import QFont, QCursor, QFontMetrics
+from PyQt5.QtGui import QFont, QCursor, QFontMetrics, QPixmap
 import qtawesome as qta
 from ui.theme import *
 from ui.components import ToastOverlay
@@ -31,6 +33,9 @@ class StreamInterceptor(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
+        self._original_excepthook = sys.excepthook
         self.setWindowTitle("Discord Mass Account Cleanup Tool")
         self.resize(1100, 750)
         self.setMinimumSize(900, 600)
@@ -223,11 +228,13 @@ class MainWindow(QMainWindow):
         self.toast = ToastOverlay(self)
         
         def my_excepthook(type, value, tback):
-            import os, traceback
-            os.makedirs('scratch', exist_ok=True)
-            with open('scratch/crash.log', 'w') as f:
+            import traceback
+            crash_dir = os.path.join(tempfile.gettempdir(), "discord-mass-cleanup-tool")
+            os.makedirs(crash_dir, exist_ok=True)
+            crash_path = os.path.join(crash_dir, "crash.log")
+            with open(crash_path, 'w', encoding='utf-8') as f:
                 f.write(''.join(traceback.format_exception(type, value, tback)))
-            sys.__excepthook__(type, value, tback)
+            self._original_excepthook(type, value, tback)
         sys.excepthook = my_excepthook
         
         self.set_authenticated(False)
@@ -309,7 +316,7 @@ class MainWindow(QMainWindow):
         self.account_name_label.setText(self.account_name)
         if self.account_name:
             if avatar_bytes:
-                from PyQt5.QtGui import QPixmap, QPainter, QPainterPath
+                from PyQt5.QtGui import QPainter, QPainterPath
                 from PyQt5.QtCore import Qt
                 pixmap = QPixmap()
                 if pixmap.loadFromData(avatar_bytes):
@@ -380,6 +387,12 @@ class MainWindow(QMainWindow):
         self.friends_page.clear()
         self.notifications_page.set_token("")
         self.log_msg("Session closed.")
+
+    def closeEvent(self, event):
+        sys.stdout = self._original_stdout
+        sys.stderr = self._original_stderr
+        sys.excepthook = self._original_excepthook
+        super().closeEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

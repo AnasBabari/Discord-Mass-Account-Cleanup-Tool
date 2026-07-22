@@ -1,9 +1,9 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QMenu, QStackedWidget, QLabel, QShortcut
-from PyQt5.QtGui import QCursor, QColor, QBrush, QKeySequence
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QStackedWidget, QLabel
+from PyQt5.QtGui import QCursor, QColor, QBrush
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
 from ui.theme import *
-from ui.components import SectionHeader, StatBadge, LoadingOverlay, get_length_str
+from ui.components import SectionHeader, LoadingOverlay
 from workers import FetchBlockedWorker, UnblockUsersWorker
 
 class BlockedPage(QWidget):

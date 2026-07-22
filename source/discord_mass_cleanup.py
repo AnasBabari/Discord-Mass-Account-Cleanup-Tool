@@ -11,7 +11,6 @@ Usage:
 """
 
 import json
-import os
 import time
 
 import sys
@@ -35,9 +34,28 @@ except ImportError:
 
 BASE_URL = "https://discord.com/api/v10"
 REQUEST_DELAY = 0.6  # seconds between requests (be polite to the API)
+WS_READY_TIMEOUT = 20.0
 
 
 # ── Shared API Request Helper ─────────────────────────────────────────────────
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    timeout_type_names = ("Timeout", "ConnectTimeout", "ReadTimeout")
+    for name in timeout_type_names:
+        timeout_type = getattr(requests, name, None)
+        if timeout_type and isinstance(exc, timeout_type):
+            return True
+    errors_module = getattr(requests, "errors", None)
+    if errors_module:
+        for name in timeout_type_names:
+            timeout_type = getattr(errors_module, name, None)
+            if timeout_type and isinstance(exc, timeout_type):
+                return True
+    text = str(exc).lower()
+    return "timeout" in text or "timed out" in text
 
 
 def _make_api_request(
@@ -54,8 +72,8 @@ def _make_api_request(
                 r = requests.request(method, url, headers=headers, timeout=10, impersonate="chrome110", **kwargs)
             else:
                 r = requests.request(method, url, headers=headers, timeout=10, **kwargs)
-        except Exception as e:
-            if "timeout" in str(e).lower() or "timeout" in type(e).__name__.lower():
+        except NetworkError as e:
+            if _is_timeout_error(e):
                 if not quiet:
                     print("  ⏳  Request timed out — retrying…")
                 retries += 1
@@ -356,7 +374,7 @@ def _get_read_states(token: str) -> dict[str, list[str]]:
             pass
 
     ws = websocket.WebSocketApp(
-        "wss://gateway.discord.gg/?v=9&encoding=json",
+        "wss://gateway.discord.gg/?v=10&encoding=json",
         on_open=on_open,
         on_message=on_message,
         on_error=on_error,
@@ -366,7 +384,7 @@ def _get_read_states(token: str) -> dict[str, list[str]]:
     wst = threading.Thread(target=ws.run_forever)
     wst.daemon = True
     wst.start()
-    wst.join(timeout=10.0)
+    wst.join(timeout=WS_READY_TIMEOUT)
     
     if wst.is_alive():
         print("  [WS] Timeout waiting for READY event. Aborting connection.")
@@ -781,8 +799,6 @@ def main() -> None:
             elif choice == "3":
                 mass_read_notifications(token)
             elif choice == "t":
-                if "DISCORD_TOKEN" in os.environ:
-                    del os.environ["DISCORD_TOKEN"]
                 print("\nLogging out...")
                 break
             elif choice == "q":

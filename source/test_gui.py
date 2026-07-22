@@ -65,3 +65,16 @@ def test_servers_page(qtbot):
     
     assert page.servers_table.rowCount() == 1
     assert page.servers_table.item(0, 1).text() == "Test Server"
+
+
+def test_logout_does_not_crash(app):
+    app.logout()
+    assert app.windowTitle() == "Discord Mass Account Cleanup Tool"
+
+
+def test_close_restores_streams(app):
+    original_stdout = app._original_stdout
+    original_stderr = app._original_stderr
+    app.close()
+    assert sys.stdout is original_stdout
+    assert sys.stderr is original_stderr
