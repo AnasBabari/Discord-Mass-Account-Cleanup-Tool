@@ -224,7 +224,11 @@ def block_user(token: str, user_id: str) -> tuple[int, str]:
 
 
 def _get_read_states(token: str) -> dict[str, list[str]]:
-    """Connects to the Discord WS to extract unread channel IDs grouped by server."""
+    """
+    Connects to the Discord WS to extract unread channel IDs grouped by server.
+    WARNING: This function is blocking and will wait for up to WS_READY_TIMEOUT
+    seconds. Do not call this function from the main GUI thread to avoid UI freezes.
+    """
     grouped_channels = {}
     has_received_ready = False
     print("  [WS] Connecting to Discord Gateway to fetch your read states...")
@@ -440,6 +444,8 @@ def parse_selection(text: str, max_index: int) -> list[int]:
             lo, hi = int(lo_str), int(hi_str)
             if lo > hi:
                 lo, hi = hi, lo
+            lo = max(1, lo)
+            hi = min(max_index, hi)
             for n in range(lo, hi + 1):
                 indices.add(n)
         else:

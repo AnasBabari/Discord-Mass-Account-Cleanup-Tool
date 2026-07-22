@@ -113,6 +113,8 @@ class RemoveFriendsWorker(QThread):
             except Exception as e:
                 failed += 1
                 self.progress_signal.emit(i+1, f"[-] FAILED: {display} ({e})")
+                if "Cloudflare IP Ban" in str(e):
+                    break
             time.sleep(dmc.REQUEST_DELAY)
         self.finished_signal.emit(success, failed)
 
@@ -146,6 +148,8 @@ class BlockUsersWorker(QThread):
             except Exception as e:
                 failed += 1
                 self.progress_signal.emit(i+1, f"[-] FAILED: {display} ({e})")
+                if "Cloudflare IP Ban" in str(e):
+                    break
             time.sleep(dmc.REQUEST_DELAY)
         self.finished_signal.emit(success, failed)
 
@@ -194,6 +198,8 @@ class UnblockUsersWorker(QThread):
             except Exception as e:
                 failed += 1
                 self.progress_signal.emit(i+1, f"[-] FAILED: {display} ({e})")
+                if "Cloudflare IP Ban" in str(e):
+                    break
             time.sleep(dmc.REQUEST_DELAY)
         self.finished_signal.emit(success, failed)
 
@@ -226,6 +232,8 @@ class LeaveServersWorker(QThread):
             except Exception as e:
                 failed += 1
                 self.progress_signal.emit(i+1, f"[-] FAILED: {g['name']} ({e})")
+                if "Cloudflare IP Ban" in str(e):
+                    break
             time.sleep(dmc.REQUEST_DELAY)
         self.finished_signal.emit(success, failed)
 
@@ -285,6 +293,9 @@ class ReadNotifsWorker(QThread):
                     except Exception as e:
                         fail_count += len(chunk)
                         self.progress_signal.emit(f"[-] Chunk failed for {server_name}: {e}")
+                        if "Cloudflare IP Ban" in str(e):
+                            self.finished_signal.emit(success_count, fail_count, "Aborted due to Cloudflare IP Ban")
+                            return
                     time.sleep(dmc.REQUEST_DELAY)
                 
             self.finished_signal.emit(success_count, fail_count, "")
