@@ -138,6 +138,23 @@ def test_get_guilds_429_retry_after_header(mock_sleep, mock_responses):
     mock_sleep.assert_called_once_with(0.25)
 
 
+@patch("time.sleep", return_value=None)
+def test_get_guilds_429_json_without_retry_after_uses_header(mock_sleep, mock_responses):
+    mock_responses.add(
+        responses.GET,
+        f"{BASE_URL}/users/@me/guilds",
+        json={},
+        headers={"Retry-After": "0.25"},
+        status=429,
+    )
+    mock_responses.add(
+        responses.GET, f"{BASE_URL}/users/@me/guilds", json=[{"id": "1"}], status=200
+    )
+    guilds = dmc.get_guilds("test_token")
+    assert len(guilds) == 1
+    mock_sleep.assert_called_once_with(0.25)
+
+
 def test_get_guilds_http_error(mock_responses):
     mock_responses.add(responses.GET, f"{BASE_URL}/users/@me/guilds", status=500)
     with pytest.raises(requests.RequestException):

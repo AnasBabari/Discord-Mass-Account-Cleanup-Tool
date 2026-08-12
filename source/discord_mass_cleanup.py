@@ -96,10 +96,14 @@ def _make_api_request(
                 # Non-1015 HTML 429 (generic Cloudflare rate limit) — use default wait
                 wait = 5.0
             else:
+                wait = None
                 try:
                     payload = r.json()
-                    wait = float(payload.get("retry_after", 5.0)) if isinstance(payload, dict) else 5.0
+                    if isinstance(payload, dict) and payload.get("retry_after") is not None:
+                        wait = float(payload["retry_after"])
                 except (ValueError, TypeError, AttributeError):
+                    pass
+                if wait is None:
                     try:
                         wait = float(r.headers.get("Retry-After", 5.0))
                     except (TypeError, ValueError):
