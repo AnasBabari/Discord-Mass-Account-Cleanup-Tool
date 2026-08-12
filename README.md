@@ -1,26 +1,30 @@
 # Discord Mass Account Cleanup Tool
 
-A desktop app and CLI tool for quickly cleaning up your Discord account. Mass leave servers, remove friends, block users, and clear notifications — all in one place.
+A Windows desktop application and command-line utility for carrying out account-clean-up actions through Discord's HTTP API and Gateway. It supports explicit selection of servers, relationships, and notifications while keeping the long-running work off the GUI thread.
 
 ![Servers Page](source/assets/servers.png)
 
 ## Download
 
-> **No Python required** — grab the latest pre-built Windows executable from the [**Releases page**](https://github.com/AnasBabari/Discord-Mass-Account-Cleanup-Tool/releases/latest).
+> **No Python required** — download the latest Windows executable from the [Releases page](https://github.com/AnasBabari/Discord-Mass-Account-Cleanup-Tool/releases/latest).
 
-Just download `Discord-Mass-Cleanup-Tool.exe`, double-click, and go.
+The executable is built by the tagged-release workflow. The source tree remains available for inspection and local development.
 
-## Features
+## What it does
 
-- **Mass Leave Servers** — select individually, by range, or all at once with server details and member-since dates
-- **Mass Remove Friends** — same flexible selection with search filtering
-- **Mass Block Users** — bulk-block selected friends
-- **Mass Read Notifications** — instantly mark all DMs, group chats, and server channels as read via WebSocket
-- **Desktop GUI** — polished PyQt5 interface with dark theme, animated splash screen, real-time progress, and toast notifications
-- **CLI Mode** — fully interactive terminal interface, no GUI required
-- **Secure Token Storage** — token saved to your OS credential manager via `keyring`
-- **Rate-Limit Handling** — automatic retry with backoff on Discord 429s and Cloudflare blocks
-- **Anti-Detection** — uses `curl_cffi` with browser impersonation to bypass Cloudflare fingerprinting
+- Lists servers and relationships, with search and explicit selection.
+- Leaves selected servers, removes selected friends, or blocks selected users.
+- Reads notifications through the Discord Gateway and reports progress.
+- Provides a PyQt5 GUI with background `QThread` workers, cancellation, progress, and error signals.
+- Provides an interactive CLI for environments where a GUI is not appropriate.
+- Stores a token through the operating system credential manager when `keyring` is available.
+- Handles HTTP timeouts and Discord `429` responses with bounded retries and `Retry-After` support. HTML responses are treated as a possible upstream protection page rather than being printed verbatim.
+
+The tool uses the REST API for account operations and the Gateway only for notification read-state work. It does not claim to provide an official Discord bulk-management API.
+
+## Responsible use and account safety
+
+This is an account-automation tool. Discord user-token automation and self-bot behaviour may violate Discord's Terms of Service and can result in account action. Use only on an account you control, at a rate that is appropriate for the service, and after reviewing the current Discord policies. Never paste a token into an issue, chat, log, or screen recording. The project does not attempt to evade enforcement or guarantee that an account will not be rate-limited.
 
 ## Screenshots
 
@@ -28,94 +32,96 @@ Just download `Discord-Mass-Cleanup-Tool.exe`, double-click, and go.
 |---|---|---|
 | ![Servers](source/assets/servers.png) | ![Friends](source/assets/friends.png) | ![Notifications](source/assets/notifications.png) |
 
-## For Developers
+## Architecture
 
-All source code lives in the [`source/`](source/) directory.
+```
+GUI / CLI
+    |
+    +-- REST helpers: guilds, relationships, leave/remove/block
+    |       +-- timeout handling
+    |       +-- Retry-After-aware 429 handling
+    |       +-- bounded retry count
+    |
+    +-- Gateway helper: notification read-state
+    |
+    +-- QThread workers (GUI only)
+            +-- progress, result, error, and finished signals
+```
+
+The request helper owns response parsing and retry decisions. GUI workers call the helper from `QThread`s so network activity does not block the event loop. Tests use mocked HTTP and Gateway responses; the test suite does not contact Discord or validate live-account behaviour.
+
+## Run from source
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.10 or newer
+- A Windows Qt runtime for the GUI (provided by `PyQt5`)
 
 ```bash
 cd source
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-Key dependencies: `curl_cffi` (Cloudflare bypass via browser impersonation), `websocket-client` (Discord Gateway for notification read-states), `PyQt5` + `qtawesome` (GUI), `keyring` (secure token storage).
+### GUI
 
-### Run from source
-
-**GUI (recommended):**
 ```bash
 cd source
 python gui_app.py
 ```
 
-**CLI:**
+### CLI
+
 ```bash
 cd source
 python discord_mass_cleanup.py
 ```
 
-### Build the exe yourself
+### Build the Windows executable
 
 ```bash
 cd source
-pip install pyinstaller
+python -m pip install pyinstaller
 pyinstaller gui_app.spec
 ```
 
-The built exe will be at `source/dist/gui_app.exe`.
-
-## How to Get Your Discord User Token
-
-1. Open [Discord Web App](https://discord.com/app) and log in.
-2. Press `F12` → go to the **Application** tab → **Local Storage** → `https://discord.com`.
-3. Press `Ctrl+Shift+M` (`Cmd+Shift+M` on Mac) to enable mobile view (Discord hides the token on desktop).
-4. Type `token` in the filter bar and copy the value (without quotes).
+The executable is written to `source/dist/gui_app.exe` before the release workflow gives it its distribution name.
 
 ## Testing
 
+From the repository root:
+
 ```bash
 cd source
-pytest test_discord_mass_cleanup.py -v   # Core API tests (58 tests)
-pytest test_gui.py -v                     # GUI component tests (4 tests)
+python -m pytest -q
 ```
 
-## Project Structure
+The current suite contains **72 tests**. It covers request pagination and selection, HTTP status/error handling, timeout and `Retry-After` behaviour, Gateway payload handling, CLI flows, GUI components/pages, and worker signal/cancellation paths. GUI tests run headlessly in CI with `QT_QPA_PLATFORM=offscreen`.
+
+The tests are deterministic and mocked. A green run demonstrates the local request and UI contracts; it is not evidence that a live token is valid or that Discord will permit a particular account action.
+
+## Project structure
 
 ```
 ├── README.md
 ├── LICENSE
-├── .gitignore
-├── .github/workflows/release.yml   # CI: auto-build exe on tag push
+├── .github/workflows/release.yml   # test, build, and publish tagged releases
 └── source/
-    ├── gui_app.py                   # PyQt5 desktop GUI entry point
-    ├── discord_mass_cleanup.py      # Core API logic & CLI entry point
-    ├── workers.py                   # Background QThread workers
-    ├── gui_app.spec                 # PyInstaller build config
+    ├── gui_app.py                  # PyQt5 desktop entry point
+    ├── discord_mass_cleanup.py     # REST helpers and CLI entry point
+    ├── workers.py                  # background QThread workers
+    ├── gui_app.spec                # PyInstaller build configuration
     ├── requirements.txt
-    ├── ui/
-    │   ├── theme.py                 # Color constants & QSS loader
-    │   ├── theme.qss                # Qt stylesheet (dark theme)
-    │   ├── components.py            # Reusable widgets (loading overlay, toasts)
-    │   └── pages/
-    │       ├── login.py             # Token input & auth page
-    │       ├── servers.py           # Server list & leave functionality
-    │       ├── friends.py           # Friends list, remove & block
-    │       ├── notifications.py     # Bulk mark-as-read
-    │       └── logs.py              # Terminal-style log viewer
-    ├── test_discord_mass_cleanup.py  # 58 API & CLI tests
-    ├── test_gui.py                   # 4 GUI component tests
-    └── assets/
-        ├── servers.png
-        ├── friends.png
-        └── notifications.png
+    ├── test_discord_mass_cleanup.py # API and CLI tests
+    ├── test_gui.py                 # GUI component tests
+    ├── test_gui_pages.py           # page-level GUI tests
+    ├── test_workers.py             # worker signal/error tests
+    ├── ui/                         # theme, components, and pages
+    └── assets/                     # screenshots used by the README and UI
 ```
 
-## Disclaimer
+## Release workflow
 
-> ⚠️ This tool uses your personal Discord user token. Automating user accounts ("self-botting") is against Discord's Terms of Service. Use at your own discretion. It is generally low risk for a one-off cleanup, but you are solely responsible for your account.
+Pushing a tag matching `v*` runs the complete test suite on Ubuntu before a Windows build creates the executable release asset. The workflow sets Qt to offscreen mode for tests and uses pinned GitHub Action revisions. A failed test job prevents the release build.
 
 ## License
 

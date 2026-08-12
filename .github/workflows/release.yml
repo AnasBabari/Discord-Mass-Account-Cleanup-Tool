@@ -28,13 +28,10 @@ jobs:
           pip install -r requirements.txt
           pip install pytest responses pytest-qt
 
-      - name: Run core tests
-        run: pytest test_discord_mass_cleanup.py -v
-
-      - name: Run GUI tests
+      - name: Run all tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest test_gui.py -v
+        run: pytest -q
 
   build:
     needs: test

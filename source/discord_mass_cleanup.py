@@ -97,9 +97,14 @@ def _make_api_request(
                 wait = 5.0
             else:
                 try:
-                    wait = float(r.json().get("retry_after", 5.0))
-                except (ValueError, KeyError):
-                    wait = 5.0
+                    payload = r.json()
+                    wait = float(payload.get("retry_after", 5.0)) if isinstance(payload, dict) else 5.0
+                except (ValueError, TypeError, AttributeError):
+                    try:
+                        wait = float(r.headers.get("Retry-After", 5.0))
+                    except (TypeError, ValueError):
+                        wait = 5.0
+                wait = max(0.0, wait)
             if not quiet:
                 print(f"  ⏳  Rate-limited — waiting {wait:.2f}s…")
             time.sleep(wait)
