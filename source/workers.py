@@ -261,7 +261,7 @@ class ReadNotifsWorker(CancellableTokenWorker):
 
     def run(self):
         try:
-            grouped_channels = dmc._get_read_states(self.token)
+            grouped_channels = dmc._get_read_states(self.token, cancel_event=self._cancel_event)
             if not grouped_channels:
                 self.finished_signal.emit(0, 0, "No unread channels found.")
                 return
