@@ -10,11 +10,14 @@ class ServersPage(QWidget):
     log_msg_signal = pyqtSignal(str, str)
     action_finished = pyqtSignal()
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, worker_tracker=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.token = ""
         self.servers_data = []
+        self.worker_tracker = worker_tracker or (lambda worker: worker)
+        self.servers_worker = None
+        self.leave_worker = None
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 44)
@@ -111,8 +114,9 @@ class ServersPage(QWidget):
         self.loading_overlay.set_status("Fetching servers...")
         self.loading_overlay.set_detail("")
         self.log_msg_signal.emit("Fetching server list...", "info")
-        self.servers_worker = FetchServersWorker(self.token)
+        self.servers_worker = self.worker_tracker(FetchServersWorker(self.token))
         self.servers_worker.finished.connect(self.servers_worker.deleteLater)
+        self.servers_worker.finished.connect(lambda: setattr(self, "servers_worker", None))
         self.servers_worker.result_signal.connect(self.on_servers_fetched)
         self.servers_worker.start()
 
@@ -213,8 +217,9 @@ class ServersPage(QWidget):
         self.servers_progress.setValue(0)
         self.servers_progress.show()
         
-        self.leave_worker = LeaveServersWorker(self.token, to_leave)
+        self.leave_worker = self.worker_tracker(LeaveServersWorker(self.token, to_leave))
         self.leave_worker.finished.connect(self.leave_worker.deleteLater)
+        self.leave_worker.finished.connect(lambda: setattr(self, "leave_worker", None))
         self.leave_worker.progress_signal.connect(self.on_leave_progress)
         self.leave_worker.finished_signal.connect(self.on_leave_finished)
         self.leave_worker.start()
@@ -231,6 +236,10 @@ class ServersPage(QWidget):
         self.fetch_data()
         
     def clear(self):
+        for worker in (self.servers_worker, self.leave_worker):
+            if worker is not None and hasattr(worker, "cancel"):
+                worker.cancel()
+        self.token = ""
         self.servers_table.setRowCount(0)
         self.servers_data = []
         self.update_status()

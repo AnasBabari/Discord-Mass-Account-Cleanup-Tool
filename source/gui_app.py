@@ -1,6 +1,7 @@
 # pyrefly: ignore[missing-import]
 import sys
 import os
+import time
 import tempfile
 import keyring
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QStackedWidget, QFrame
@@ -37,12 +38,26 @@ class MainWindow(QMainWindow):
         worker.finished.connect(worker.deleteLater)
         return worker
 
+    def cancel_all_workers(self, timeout_ms=1000):
+        """Cancel every tracked worker and wait briefly before clearing secrets."""
+        workers = list(self._active_workers)
+        for worker in workers:
+            if hasattr(worker, "cancel"):
+                worker.cancel()
+        deadline = time.monotonic() + timeout_ms / 1000
+        for worker in workers:
+            if worker.isRunning():
+                remaining = max(0, int((deadline - time.monotonic()) * 1000))
+                worker.wait(remaining)
+
     def __init__(self):
         super().__init__()
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         self._original_excepthook = sys.excepthook
         self._active_workers = set()
+        self.login_worker = None
+        self._session_generation = 0
         
         def my_excepthook(type, value, tback):
             import traceback, re
@@ -215,22 +230,22 @@ class MainWindow(QMainWindow):
         self.login_page.login_requested.connect(self.start_login)
         self.pages.addWidget(self.login_page)
 
-        self.servers_page = ServersPage()
+        self.servers_page = ServersPage(worker_tracker=self.track_worker)
         self.servers_page.log_msg_signal.connect(self.log_msg)
         self.servers_page.action_finished.connect(lambda: self.toast.show_message("Server action completed."))
         self.pages.addWidget(self.servers_page)
 
-        self.friends_page = FriendsPage()
+        self.friends_page = FriendsPage(worker_tracker=self.track_worker)
         self.friends_page.log_msg_signal.connect(self.log_msg)
         self.friends_page.action_finished.connect(lambda: self.toast.show_message("Friend action completed."))
         self.pages.addWidget(self.friends_page)
 
-        self.blocked_page = BlockedPage()
+        self.blocked_page = BlockedPage(worker_tracker=self.track_worker)
         self.blocked_page.log_msg_signal.connect(self.log_msg)
         self.blocked_page.action_finished.connect(lambda: self.toast.show_message("Users Unblocked Successfully", msg_type="success"))
         self.pages.addWidget(self.blocked_page)
 
-        self.notifications_page = NotificationsPage()
+        self.notifications_page = NotificationsPage(worker_tracker=self.track_worker)
         self.notifications_page.log_msg_signal.connect(self.log_msg)
         self.notifications_page.action_finished.connect(lambda msg, mtype: self.toast.show_message(msg, msg_type=mtype))
         self.pages.addWidget(self.notifications_page)
@@ -303,12 +318,23 @@ class MainWindow(QMainWindow):
             self.log_msg("No token found. Awaiting manual input.", "debug")
 
     def start_login(self, token, save=True):
+        self._session_generation += 1
+        generation = self._session_generation
+        if self.login_worker is not None and self.login_worker.isRunning():
+            self.login_worker.cancel()
         self.login_page.set_loading(True)
         self.login_page.set_status("")
         
         self.login_worker = self.track_worker(LoginWorker(token, save=save))
-        self.login_worker.result_signal.connect(self.on_login_result)
+        self.login_worker.result_signal.connect(
+            lambda *args, generation=generation: self._accept_login_result(generation, *args)
+        )
         self.login_worker.start()
+
+    def _accept_login_result(self, generation, *args):
+        if generation != self._session_generation:
+            return
+        self.on_login_result(*args)
 
     def on_login_result(self, success, message, raw_username, token, avatar_bytes, save):
         self.login_page.set_loading(False)
@@ -381,6 +407,8 @@ class MainWindow(QMainWindow):
         self.blocked_page.fetch_data()
 
     def logout(self):
+        self._session_generation += 1
+        self.cancel_all_workers()
         self.token = ""
         self.account_name = ""
         self.account_name_label.setText("")
@@ -398,15 +426,13 @@ class MainWindow(QMainWindow):
         
         self.servers_page.clear()
         self.friends_page.clear()
-        self.notifications_page.set_token("")
+        self.blocked_page.clear()
+        self.notifications_page.clear()
         self.log_msg("Session closed.")
 
     def closeEvent(self, event):
-        for worker in list(self._active_workers):
-            if hasattr(worker, "cancel"):
-                worker.cancel()
-            if worker.isRunning():
-                worker.wait(1000)
+        self._session_generation += 1
+        self.cancel_all_workers()
         sys.stdout = self._original_stdout
         sys.stderr = self._original_stderr
         sys.excepthook = self._original_excepthook

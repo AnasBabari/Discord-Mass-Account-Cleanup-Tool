@@ -10,10 +10,12 @@ class NotificationsPage(QWidget):
     log_msg_signal = pyqtSignal(str, str)
     action_finished = pyqtSignal(str, str) # title, msg_type
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, worker_tracker=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.token = ""
+        self.worker_tracker = worker_tracker or (lambda worker: worker)
+        self.read_worker = None
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
@@ -120,8 +122,9 @@ class NotificationsPage(QWidget):
         self.read_notifs_progress.show()
         self.log_msg_signal.emit("Scraping unread states... (ETA: 5-10s)", "info")
         
-        self.read_worker = ReadNotifsWorker(self.token)
+        self.read_worker = self.worker_tracker(ReadNotifsWorker(self.token))
         self.read_worker.finished.connect(self.read_worker.deleteLater)
+        self.read_worker.finished.connect(lambda: setattr(self, "read_worker", None))
         self.read_worker.progress_signal.connect(lambda msg: self.log_msg_signal.emit(msg, "info"))
         self.read_worker.finished_signal.connect(self.on_read_finished)
         self.read_worker.start()
@@ -135,4 +138,12 @@ class NotificationsPage(QWidget):
             self.action_finished.emit(f"Error: {err}", "error")
         else:
             self.log_msg_signal.emit(f"COMPLETE. READ: {success}, FAIL: {failed}", "success")
-            self.action_finished.emit(f"Marked {success} channels as read.", "info")
+        self.action_finished.emit(f"Marked {success} channels as read.", "info")
+
+    def clear(self):
+        if self.read_worker is not None and hasattr(self.read_worker, "cancel"):
+            self.read_worker.cancel()
+        self.token = ""
+        self.read_notifs_btn.setEnabled(True)
+        self.read_notifs_btn.setText("  Mark All Read")
+        self.read_notifs_progress.hide()
