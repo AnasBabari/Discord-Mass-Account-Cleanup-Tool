@@ -10,11 +10,15 @@ class FriendsPage(QWidget):
     log_msg_signal = pyqtSignal(str, str)
     action_finished = pyqtSignal()
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, worker_tracker=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.token = ""
         self.friends_data = []
+        self.worker_tracker = worker_tracker or (lambda worker: worker)
+        self.friends_worker = None
+        self.remove_worker = None
+        self.block_worker = None
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 44)
@@ -126,8 +130,9 @@ class FriendsPage(QWidget):
         self.loading_overlay.set_status("Fetching friends...")
         self.loading_overlay.set_detail("")
         self.log_msg_signal.emit("Fetching friends list...", "info")
-        self.friends_worker = FetchFriendsWorker(self.token)
+        self.friends_worker = self.worker_tracker(FetchFriendsWorker(self.token))
         self.friends_worker.finished.connect(self.friends_worker.deleteLater)
+        self.friends_worker.finished.connect(lambda: setattr(self, "friends_worker", None))
         self.friends_worker.result_signal.connect(self.on_friends_fetched)
         self.friends_worker.start()
 
@@ -257,8 +262,9 @@ class FriendsPage(QWidget):
         self.friends_progress.setValue(0)
         self.friends_progress.show()
         
-        self.remove_worker = RemoveFriendsWorker(self.token, to_remove)
+        self.remove_worker = self.worker_tracker(RemoveFriendsWorker(self.token, to_remove))
         self.remove_worker.finished.connect(self.remove_worker.deleteLater)
+        self.remove_worker.finished.connect(lambda: setattr(self, "remove_worker", None))
         self.remove_worker.progress_signal.connect(self.on_remove_progress)
         self.remove_worker.finished_signal.connect(self.on_remove_finished)
         self.remove_worker.start()
@@ -295,8 +301,9 @@ class FriendsPage(QWidget):
         self.friends_progress.setValue(0)
         self.friends_progress.show()
         
-        self.block_worker = BlockUsersWorker(self.token, to_block)
+        self.block_worker = self.worker_tracker(BlockUsersWorker(self.token, to_block))
         self.block_worker.finished.connect(self.block_worker.deleteLater)
+        self.block_worker.finished.connect(lambda: setattr(self, "block_worker", None))
         self.block_worker.progress_signal.connect(self.on_remove_progress)
         self.block_worker.finished_signal.connect(self.on_block_finished)
         self.block_worker.start()
@@ -308,6 +315,10 @@ class FriendsPage(QWidget):
         self.fetch_data()
         
     def clear(self):
+        for worker in (self.friends_worker, self.remove_worker, self.block_worker):
+            if worker is not None and hasattr(worker, "cancel"):
+                worker.cancel()
+        self.token = ""
         self.friends_table.setRowCount(0)
         self.friends_data = []
         self.update_status()

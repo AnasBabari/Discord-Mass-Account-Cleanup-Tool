@@ -37,20 +37,17 @@ def test_remove_friends_worker_success_and_cancel(qtbot):
     worker = RemoveFriendsWorker("fake_token", friends_to_remove)
     
     with patch("discord_mass_cleanup.remove_friend") as mock_remove:
-        # User 1 succeeds, then it cancels during time.sleep
-        mock_remove.side_effect = [
-            (204, "")
-        ]
-        
-        # We will manually cancel after 1 iteration to test cancellation
-        with patch("time.sleep", side_effect=lambda x: worker.cancel()):
-            with qtbot.waitSignal(worker.finished_signal, timeout=1000) as blocker:
-                worker.start()
-                
-            success, failed = blocker.args
-            assert success == 1
-            assert failed == 0
-            assert mock_remove.call_count == 1
+        # Cancel after the first completed request; the next iteration must
+        # observe the shared cancellation event and avoid another mutation.
+        mock_remove.side_effect = lambda *args, **kwargs: (worker.cancel() or (204, ""))
+        with qtbot.waitSignal(worker.finished_signal, timeout=1000) as blocker:
+            worker.start()
+
+        success, failed = blocker.args
+        assert success == 1
+        assert failed == 0
+        assert mock_remove.call_count == 1
+        assert worker.token == ""
 
 def test_leave_servers_worker_cloudflare_ban(qtbot):
     servers_to_leave = [{"id": "1", "name": "Server 1"}, {"id": "2", "name": "Server 2"}]

@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +16,16 @@ BASE_URL = "https://discord.com/api/v10"
 def mock_responses():
     with responses.RequestsMock() as rsps:
         yield rsps
+
+
+@pytest.fixture(autouse=True)
+def standard_http_transport(monkeypatch):
+    """Inject the interceptable stdlib-compatible transport for each test."""
+    monkeypatch.setattr(dmc, "HTTP_TRANSPORT", requests)
+    monkeypatch.setattr(dmc.REQUEST_COORDINATOR, "min_interval", 0.0)
+    dmc.REQUEST_COORDINATOR.reset()
+    yield
+    dmc.REQUEST_COORDINATOR.reset()
 
 
 # --- parse_selection tests ---
@@ -516,6 +528,35 @@ def test_make_api_request_non_timeout_error(mock_responses):
     )
     with pytest.raises(requests.RequestException, match="Connection failed"):
         dmc._make_api_request("GET", "/users/@me/guilds", "token", max_retries=2)
+
+
+def test_request_coordinator_serializes_concurrent_workers():
+    coordinator = dmc.RequestCoordinator(min_interval=0.01)
+    timestamps = []
+    lock = threading.Lock()
+
+    def worker():
+        assert coordinator.wait()
+        with lock:
+            timestamps.append(time.monotonic())
+
+    threads = [threading.Thread(target=worker) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=1)
+
+    assert len(timestamps) == 3
+    assert timestamps[1] - timestamps[0] >= 0.009
+    assert timestamps[2] - timestamps[1] >= 0.009
+
+
+def test_request_coordinator_honours_cancellation():
+    coordinator = dmc.RequestCoordinator(min_interval=10)
+    assert coordinator.wait()
+    cancelled = threading.Event()
+    cancelled.set()
+    assert coordinator.wait(cancelled) is False
 
 
 def test_get_clean_error_html():

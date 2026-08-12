@@ -12,29 +12,84 @@ Usage:
 
 import json
 import time
-
-import sys
 import threading
 import websocket
-
-# Test environment detection to preserve 'responses' library compatibility
-IN_PYTEST = "pytest" in sys.modules
+import requests as standard_requests
 
 try:
-    if IN_PYTEST:
-        raise ImportError("Using standard requests for tests")
-    from curl_cffi import requests
-    from curl_cffi.requests.errors import RequestsError as NetworkError
+    from curl_cffi import requests as curl_requests
+    from curl_cffi.requests.errors import RequestsError as CurlNetworkError
     HAS_CURL_CFFI = True
 except ImportError:
-    import requests
-    from requests.exceptions import RequestException as NetworkError
+    curl_requests = None
+    CurlNetworkError = None
     HAS_CURL_CFFI = False
+
+requests = curl_requests or standard_requests
+NetworkError = CurlNetworkError or standard_requests.exceptions.RequestException
+NETWORK_ERROR_TYPES = tuple(
+    error_type
+    for error_type in (CurlNetworkError, standard_requests.exceptions.RequestException)
+    if error_type is not None
+)
 
 
 BASE_URL = "https://discord.com/api/v10"
 REQUEST_DELAY = 0.6  # seconds between requests (be polite to the API)
 WS_READY_TIMEOUT = 20.0
+
+
+class RequestCancelled(RuntimeError):
+    """Raised when a worker is cancelled before a request can be sent."""
+
+
+class RequestCoordinator:
+    """Coordinate request spacing and Discord backoff across all worker threads."""
+
+    def __init__(self, min_interval: float = REQUEST_DELAY):
+        self.min_interval = max(0.0, min_interval)
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+        self._backoff_until = 0.0
+
+    def wait(self, cancel_event=None) -> bool:
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                return False
+            with self._lock:
+                now = time.monotonic()
+                wait_for = max(self._next_allowed, self._backoff_until) - now
+                if wait_for <= 0:
+                    self._next_allowed = now + self.min_interval
+                    return True
+            # Poll in short intervals so logout/shutdown cancellation remains responsive.
+            time.sleep(min(wait_for, 0.05))
+
+    def backoff(self, seconds: float) -> None:
+        with self._lock:
+            self._backoff_until = max(self._backoff_until, time.monotonic() + max(0.0, seconds))
+
+    def clear_backoff(self) -> None:
+        with self._lock:
+            self._backoff_until = 0.0
+
+    def delay(self, seconds: float, cancel_event=None) -> bool:
+        """Wait for a retry delay, allowing workers to abort immediately."""
+        if cancel_event is None:
+            time.sleep(max(0.0, seconds))
+            return True
+        return not cancel_event.wait(max(0.0, seconds))
+
+    def reset(self) -> None:
+        with self._lock:
+            self._next_allowed = 0.0
+            self._backoff_until = 0.0
+
+
+REQUEST_COORDINATOR = RequestCoordinator()
+# Production defaults to curl_cffi when installed. Tests and embedding callers
+# can inject a compatible requests-like transport without changing code paths.
+HTTP_TRANSPORT = requests
 
 
 # ── Shared API Request Helper ─────────────────────────────────────────────────
@@ -44,40 +99,57 @@ def _is_timeout_error(exc: Exception) -> bool:
     if isinstance(exc, TimeoutError):
         return True
     timeout_type_names = ("Timeout", "ConnectTimeout", "ReadTimeout")
-    for name in timeout_type_names:
-        timeout_type = getattr(requests, name, None)
-        if timeout_type and isinstance(exc, timeout_type):
-            return True
-    errors_module = getattr(requests, "errors", None)
-    if errors_module:
+    for transport in (curl_requests, standard_requests):
+        if transport is None:
+            continue
         for name in timeout_type_names:
-            timeout_type = getattr(errors_module, name, None)
+            timeout_type = getattr(transport, name, None)
             if timeout_type and isinstance(exc, timeout_type):
                 return True
+        errors_module = getattr(transport, "errors", None)
+        if errors_module:
+            for name in timeout_type_names:
+                timeout_type = getattr(errors_module, name, None)
+                if timeout_type and isinstance(exc, timeout_type):
+                    return True
     text = str(exc).lower()
     return "timeout" in text or "timed out" in text
 
 
 def _make_api_request(
-    method: str, endpoint: str, token: str, max_retries: int = 5, quiet: bool = False, **kwargs
+    method: str,
+    endpoint: str,
+    token: str,
+    max_retries: int = 5,
+    quiet: bool = False,
+    cancel_event=None,
+    transport=None,
+    **kwargs,
 ) -> requests.Response:
-    """Helper for Discord API requests with consistent rate-limit and timeout handling."""
+    """Helper for Discord API requests with shared rate-limit and timeout handling."""
     headers = {"Authorization": token}
     url = f"{BASE_URL}{endpoint}"
+    client = transport or HTTP_TRANSPORT
 
     retries = 0
     while retries < max_retries:
+        if not REQUEST_COORDINATOR.wait(cancel_event):
+            raise RequestCancelled("Request cancelled before dispatch")
         try:
-            if HAS_CURL_CFFI:
-                r = requests.request(method, url, headers=headers, timeout=10, impersonate="chrome110", **kwargs)
+            if client is curl_requests and HAS_CURL_CFFI:
+                r = client.request(method, url, headers=headers, timeout=10, impersonate="chrome110", **kwargs)
             else:
-                r = requests.request(method, url, headers=headers, timeout=10, **kwargs)
-        except NetworkError as e:
+                r = client.request(method, url, headers=headers, timeout=10, **kwargs)
+        except NETWORK_ERROR_TYPES as e:
             if _is_timeout_error(e):
                 if not quiet:
                     print("  ⏳  Request timed out — retrying…")
                 retries += 1
-                time.sleep(2)
+                REQUEST_COORDINATOR.backoff(2)
+                if not REQUEST_COORDINATOR.delay(2, cancel_event):
+                    REQUEST_COORDINATOR.clear_backoff()
+                    raise RequestCancelled("Request cancelled during retry delay")
+                REQUEST_COORDINATOR.clear_backoff()
                 continue
             raise
         except Exception as e:
@@ -85,7 +157,11 @@ def _make_api_request(
                 if not quiet:
                     print("  ⏳  Request timed out — retrying…")
                 retries += 1
-                time.sleep(2)
+                REQUEST_COORDINATOR.backoff(2)
+                if not REQUEST_COORDINATOR.delay(2, cancel_event):
+                    REQUEST_COORDINATOR.clear_backoff()
+                    raise RequestCancelled("Request cancelled during retry delay")
+                REQUEST_COORDINATOR.clear_backoff()
                 continue
             raise
 
@@ -111,7 +187,11 @@ def _make_api_request(
                 wait = max(0.0, wait)
             if not quiet:
                 print(f"  ⏳  Rate-limited — waiting {wait:.2f}s…")
-            time.sleep(wait)
+            REQUEST_COORDINATOR.backoff(wait)
+            if not REQUEST_COORDINATOR.delay(wait, cancel_event):
+                REQUEST_COORDINATOR.clear_backoff()
+                raise RequestCancelled("Request cancelled during rate-limit delay")
+            REQUEST_COORDINATOR.clear_backoff()
             retries += 1
             continue
 
@@ -139,7 +219,7 @@ def get_clean_error(r: requests.Response) -> str:
     return text[:100] + "..." if len(text) > 100 else text
 
 
-def get_guilds(token: str) -> list[dict]:
+def get_guilds(token: str, cancel_event=None) -> list[dict]:
     """Fetch all guilds the user is in (handles pagination)."""
     guilds = []
     after = None
@@ -149,7 +229,7 @@ def get_guilds(token: str) -> list[dict]:
         if after:
             params["after"] = after
 
-        r = _make_api_request("GET", "/users/@me/guilds", token, params=params)
+        r = _make_api_request("GET", "/users/@me/guilds", token, params=params, cancel_event=cancel_event)
 
         if r.status_code == 401:
             raise ValueError("\n✗  Invalid token — please double-check and try again.")
@@ -168,18 +248,18 @@ def get_guilds(token: str) -> list[dict]:
     return guilds
 
 
-def leave_guild(token: str, guild_id: str) -> tuple[int, str]:
+def leave_guild(token: str, guild_id: str, cancel_event=None) -> tuple[int, str]:
     """Leave a guild."""
-    r = _make_api_request("DELETE", f"/users/@me/guilds/{guild_id}", token)
+    r = _make_api_request("DELETE", f"/users/@me/guilds/{guild_id}", token, cancel_event=cancel_event)
     return r.status_code, get_clean_error(r)
 
 
 # ── API helpers (Friends) ─────────────────────────────────────────────────────
 
 
-def get_friends(token: str) -> list[dict]:
+def get_friends(token: str, cancel_event=None) -> list[dict]:
     """Fetch all friends."""
-    r = _make_api_request("GET", "/users/@me/relationships", token)
+    r = _make_api_request("GET", "/users/@me/relationships", token, cancel_event=cancel_event)
 
     if r.status_code == 401:
         raise ValueError("\n✗  Invalid token — please double-check and try again.")
@@ -195,14 +275,14 @@ def get_friends(token: str) -> list[dict]:
     return friends
 
 
-def remove_friend(token: str, user_id: str) -> tuple[int, str]:
+def remove_friend(token: str, user_id: str, cancel_event=None) -> tuple[int, str]:
     """Remove a friend by user ID."""
-    r = _make_api_request("DELETE", f"/users/@me/relationships/{user_id}", token)
+    r = _make_api_request("DELETE", f"/users/@me/relationships/{user_id}", token, cancel_event=cancel_event)
     return r.status_code, get_clean_error(r)
 
-def get_blocked_users(token: str) -> list[dict]:
+def get_blocked_users(token: str, cancel_event=None) -> list[dict]:
     """Fetch all blocked users."""
-    r = _make_api_request("GET", "/users/@me/relationships", token)
+    r = _make_api_request("GET", "/users/@me/relationships", token, cancel_event=cancel_event)
     if r.status_code == 401:
         raise ValueError("\n✗  Invalid token — please double-check and try again.")
     r.raise_for_status()
@@ -216,16 +296,16 @@ def get_blocked_users(token: str) -> list[dict]:
     blocked = [rel for rel in relationships if rel.get("type") == 2]
     return blocked
 
-def unblock_user(token: str, user_id: str) -> tuple[int, str]:
+def unblock_user(token: str, user_id: str, cancel_event=None) -> tuple[int, str]:
     """Unblock a user by user ID."""
-    r = _make_api_request("DELETE", f"/users/@me/relationships/{user_id}", token)
+    r = _make_api_request("DELETE", f"/users/@me/relationships/{user_id}", token, cancel_event=cancel_event)
     return r.status_code, get_clean_error(r)
 
 
-def block_user(token: str, user_id: str) -> tuple[int, str]:
+def block_user(token: str, user_id: str, cancel_event=None) -> tuple[int, str]:
     """Block a user by user ID."""
     payload = {"type": 2}
-    r = _make_api_request("PUT", f"/users/@me/relationships/{user_id}", token, json=payload)
+    r = _make_api_request("PUT", f"/users/@me/relationships/{user_id}", token, json=payload, cancel_event=cancel_event)
     return r.status_code, get_clean_error(r)
 
 
@@ -477,7 +557,7 @@ def mass_leave_servers(token: str) -> None:
     except ValueError as e:
         print(e)
         return
-    except NetworkError as e:
+    except NETWORK_ERROR_TYPES as e:
         print(f"\n✗  Network/API error fetching servers: {e}")
         return
     except RuntimeError as e:
@@ -577,7 +657,7 @@ def mass_remove_friends(token: str) -> None:
     except ValueError as e:
         print(e)
         return
-    except NetworkError as e:
+    except NETWORK_ERROR_TYPES as e:
         print(f"\n✗  Network/API error fetching friends: {e}")
         return
     except RuntimeError as e:
@@ -728,7 +808,7 @@ def mass_read_notifications(token: str) -> None:
                     return
                 print(f"  ✗  Runtime error: {e}")
                 fail_count += len(chunk)
-            except NetworkError as e:
+            except NETWORK_ERROR_TYPES as e:
                 print(f"  ✗  Network error: {e}")
                 fail_count += len(chunk)
             except Exception as e:

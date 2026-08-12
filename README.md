@@ -41,14 +41,16 @@ GUI / CLI
     |       +-- timeout handling
     |       +-- Retry-After-aware 429 handling
     |       +-- bounded retry count
+    |       +-- shared cross-worker request coordinator
     |
     +-- Gateway helper: notification read-state
     |
     +-- QThread workers (GUI only)
             +-- progress, result, error, and finished signals
+            +-- cooperative cancellation and token scrubbing
 ```
 
-The request helper owns response parsing and retry decisions. GUI workers call the helper from `QThread`s so network activity does not block the event loop. Tests use mocked HTTP and Gateway responses; the test suite does not contact Discord or validate live-account behaviour.
+The request helper owns response parsing, retry decisions, and one shared request budget. Every GUI worker uses the same coordinator, so concurrent actions cannot each apply an independent delay and accidentally burst the Discord API. Transport selection is explicit and injectable: production uses `curl_cffi` when installed, while tests inject the standard `requests` transport rather than changing behaviour based on whether pytest is loaded. GUI workers call the helper from `QThread`s, pass a cancellation event into request waits, and scrub token references when they finish. Tests use mocked HTTP and Gateway responses; the test suite does not contact Discord or validate live-account behaviour.
 
 ## Run from source
 
@@ -95,7 +97,7 @@ cd source
 python -m pytest -q
 ```
 
-The current suite contains **72 tests**. It covers request pagination and selection, HTTP status/error handling, timeout and `Retry-After` behaviour, Gateway payload handling, CLI flows, GUI components/pages, and worker signal/cancellation paths. GUI tests run headlessly in CI with `QT_QPA_PLATFORM=offscreen`.
+The current suite contains **75 tests**. It covers request pagination and selection, HTTP status/error handling, timeout and `Retry-After` behaviour, shared request coordination, Gateway payload handling, CLI flows, GUI components/pages, and worker signal/cancellation paths. GUI tests run headlessly in CI with `QT_QPA_PLATFORM=offscreen`.
 
 The tests are deterministic and mocked. A green run demonstrates the local request and UI contracts; it is not evidence that a live token is valid or that Discord will permit a particular account action.
 
@@ -104,7 +106,7 @@ The tests are deterministic and mocked. A green run demonstrates the local reque
 ```
 ├── README.md
 ├── LICENSE
-├── .github/workflows/release.yml   # test, build, and publish tagged releases
+├── .github/workflows/release.yml   # test pushes/PRs and publish tagged releases
 └── source/
     ├── gui_app.py                  # PyQt5 desktop entry point
     ├── discord_mass_cleanup.py     # REST helpers and CLI entry point
@@ -121,7 +123,7 @@ The tests are deterministic and mocked. A green run demonstrates the local reque
 
 ## Release workflow
 
-Pushing a tag matching `v*` runs the complete test suite on Ubuntu before a Windows build creates the executable release asset. The workflow sets Qt to offscreen mode for tests and uses pinned GitHub Action revisions. A failed test job prevents the release build.
+Every push to the default branch and every pull request runs the complete suite on Ubuntu. A tag matching `v*` additionally runs the same validation before a Windows build creates the executable release asset. The workflow sets Qt to offscreen mode for tests, uses pinned GitHub Action revisions, and only grants release-write permission to the tag-gated build job. A failed test job prevents the release build.
 
 ## License
 

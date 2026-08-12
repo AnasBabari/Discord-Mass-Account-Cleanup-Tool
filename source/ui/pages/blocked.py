@@ -10,11 +10,14 @@ class BlockedPage(QWidget):
     log_msg_signal = pyqtSignal(str, str)
     action_finished = pyqtSignal()
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, worker_tracker=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.token = ""
         self.blocked_data = []
+        self.worker_tracker = worker_tracker or (lambda worker: worker)
+        self.blocked_worker = None
+        self.unblock_worker = None
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 44)
@@ -112,8 +115,9 @@ class BlockedPage(QWidget):
         self.table_stack.setCurrentIndex(2)
         self.loading_overlay.set_status("Fetching blocked users...")
         self.log_msg_signal.emit("Fetching blocked user list...", "info")
-        self.blocked_worker = FetchBlockedWorker(self.token)
+        self.blocked_worker = self.worker_tracker(FetchBlockedWorker(self.token))
         self.blocked_worker.finished.connect(self.blocked_worker.deleteLater)
+        self.blocked_worker.finished.connect(lambda: setattr(self, "blocked_worker", None))
         self.blocked_worker.result_signal.connect(self.on_blocked_fetched)
         self.blocked_worker.start()
 
@@ -210,8 +214,9 @@ class BlockedPage(QWidget):
         self.blocked_progress.setValue(0)
         self.blocked_progress.show()
         
-        self.unblock_worker = UnblockUsersWorker(self.token, to_unblock)
+        self.unblock_worker = self.worker_tracker(UnblockUsersWorker(self.token, to_unblock))
         self.unblock_worker.finished.connect(self.unblock_worker.deleteLater)
+        self.unblock_worker.finished.connect(lambda: setattr(self, "unblock_worker", None))
         self.unblock_worker.progress_signal.connect(self.on_unblock_progress)
         self.unblock_worker.finished_signal.connect(self.on_unblock_finished)
         self.unblock_worker.start()
@@ -228,6 +233,10 @@ class BlockedPage(QWidget):
         self.fetch_data()
         
     def clear(self):
+        for worker in (self.blocked_worker, self.unblock_worker):
+            if worker is not None and hasattr(worker, "cancel"):
+                worker.cancel()
+        self.token = ""
         self.blocked_table.setRowCount(0)
         self.blocked_data = []
         self.update_status()
