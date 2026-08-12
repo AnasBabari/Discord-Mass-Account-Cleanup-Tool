@@ -312,7 +312,7 @@ def block_user(token: str, user_id: str, cancel_event=None) -> tuple[int, str]:
 # ── API helpers (Read States) ─────────────────────────────────────────────
 
 
-def _get_read_states(token: str) -> dict[str, list[str]]:
+def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
     """
     Connects to the Discord WS to extract unread channel IDs grouped by server.
     WARNING: This function is blocking and will wait for up to WS_READY_TIMEOUT
@@ -484,7 +484,13 @@ def _get_read_states(token: str) -> dict[str, list[str]]:
     wst = threading.Thread(target=ws.run_forever)
     wst.daemon = True
     wst.start()
-    wst.join(timeout=WS_READY_TIMEOUT)
+    deadline = time.monotonic() + WS_READY_TIMEOUT
+    while wst.is_alive() and time.monotonic() < deadline:
+        if cancel_event is not None and cancel_event.is_set():
+            ws.close()
+            wst.join(timeout=1.0)
+            raise RequestCancelled("WebSocket request cancelled")
+        wst.join(timeout=0.1)
     
     if wst.is_alive():
         print("  [WS] Timeout waiting for READY event. Aborting connection.")
