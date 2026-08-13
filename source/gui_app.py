@@ -17,6 +17,7 @@ from ui.pages.blocked import BlockedPage
 from ui.pages.notifications import NotificationsPage
 from ui.pages.logs import LogsPage
 from workers import LoginWorker
+import discord_mass_cleanup as dmc
 
 SERVICE_ID = "DiscordMassCleanupTool"
 KEY_ID = "user_token"
@@ -28,7 +29,8 @@ class StreamInterceptor(QObject):
         self.msg_type = msg_type
     def write(self, msg):
         if msg.strip():
-            self.log_signal.emit(msg.strip(), self.msg_type)
+            cleaned = dmc.sanitize_token(msg.strip())
+            self.log_signal.emit(cleaned, self.msg_type)
     def flush(self): pass
 
 class MainWindow(QMainWindow):
@@ -60,14 +62,12 @@ class MainWindow(QMainWindow):
         self._session_generation = 0
         
         def my_excepthook(type, value, tback):
-            import traceback, re
+            import traceback
             crash_dir = os.path.join(tempfile.gettempdir(), "discord-mass-cleanup-tool")
             os.makedirs(crash_dir, exist_ok=True)
             crash_path = os.path.join(crash_dir, "crash.log")
             raw_text = ''.join(traceback.format_exception(type, value, tback))
-            # Redact Discord Authorization token patterns
-            sanitized_text = re.sub(r'([A-Za-z0-9_-]{24,28}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38})', '[REDACTED_TOKEN]', raw_text)
-            sanitized_text = re.sub(r'("Authorization":\s*")[^"]+(")', r'\1[REDACTED_TOKEN]\2', sanitized_text)
+            sanitized_text = dmc.sanitize_token(raw_text)
             with open(crash_path, 'w', encoding='utf-8') as f:
                 f.write(sanitized_text)
             self._original_excepthook(type, value, tback)
@@ -275,7 +275,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.toast.isVisible():
-            self.toast.move(self.width() - self.toast.width() - 24, 24)
+            self.toast.reposition()
             
     def set_authenticated(self, state):
         for btn in self.nav_btns.values():

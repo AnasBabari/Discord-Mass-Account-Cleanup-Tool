@@ -10,6 +10,8 @@ Usage:
     python discord_mass_cleanup.py
 """
 
+import sys
+import re
 import json
 import time
 import threading
@@ -37,6 +39,20 @@ NETWORK_ERROR_TYPES = tuple(
 BASE_URL = "https://discord.com/api/v10"
 REQUEST_DELAY = 0.6  # seconds between requests (be polite to the API)
 WS_READY_TIMEOUT = 20.0
+
+
+def sanitize_token(text: str) -> str:
+    """Redact standard Discord user tokens, modern MFA tokens, and Auth headers from text."""
+    if not text:
+        return text
+    # Redact standard 3-part Discord user tokens
+    sanitized = re.sub(r'([A-Za-z0-9_-]{24,28}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38})', '[REDACTED_TOKEN]', text)
+    # Redact Discord MFA tokens (e.g., mfa.XXXX...)
+    sanitized = re.sub(r'(mfa\.[A-Za-z0-9_-]{70,100})', '[REDACTED_TOKEN]', sanitized)
+    # Redact Authorization header values in strings / JSON dumps
+    sanitized = re.sub(r'("Authorization":\s*")[^"]+(")', r'\1[REDACTED_TOKEN]\2', sanitized)
+    sanitized = re.sub(r"('Authorization':\s*')[^']+(')", r"\1[REDACTED_TOKEN]\2", sanitized)
+    return sanitized
 
 
 class RequestCancelled(RuntimeError):
@@ -487,6 +503,12 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
     deadline = time.monotonic() + WS_READY_TIMEOUT
     while wst.is_alive() and time.monotonic() < deadline:
         if cancel_event is not None and cancel_event.is_set():
+            ws.keep_running = False
+            try:
+                if getattr(ws, "sock", None):
+                    ws.sock.close()
+            except Exception:
+                pass
             ws.close()
             wst.join(timeout=1.0)
             raise RequestCancelled("WebSocket request cancelled")
@@ -494,6 +516,12 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
     
     if wst.is_alive():
         print("  [WS] Timeout waiting for READY event. Aborting connection.")
+        ws.keep_running = False
+        try:
+            if getattr(ws, "sock", None):
+                ws.sock.close()
+        except Exception:
+            pass
         ws.close()
         wst.join(timeout=1.0)
         raise RuntimeError("WebSocket connection timed out.")

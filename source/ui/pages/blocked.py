@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QStackedWidget, QLabel
-from PyQt5.QtGui import QCursor, QColor, QBrush
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QStackedWidget, QLabel, QShortcut
+from PyQt5.QtGui import QCursor, QColor, QBrush, QKeySequence
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
 from ui.theme import *
@@ -79,6 +79,10 @@ class BlockedPage(QWidget):
         self.table_stack.addWidget(self.empty_state)      # index 1
         self.table_stack.addWidget(self.loading_overlay)   # index 2
         layout.addWidget(self.table_stack)
+        
+        QShortcut(QKeySequence("Ctrl+A"), self.blocked_table, self.select_all_blocked)
+        QShortcut(QKeySequence("Delete"), self.blocked_table, self.unblock_selected)
+        QShortcut(QKeySequence("Ctrl+F"), self, lambda: self.blocked_search.setFocus())
         
         self.blocked_progress = QProgressBar()
         self.blocked_progress.hide()

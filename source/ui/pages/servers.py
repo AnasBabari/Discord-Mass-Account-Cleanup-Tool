@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QStackedWidget, QLabel
-from PyQt5.QtGui import QCursor, QColor, QBrush
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QStackedWidget, QLabel, QShortcut
+from PyQt5.QtGui import QCursor, QColor, QBrush, QKeySequence
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
 from ui.theme import *
@@ -44,7 +44,7 @@ class ServersPage(QWidget):
         layout.addLayout(top_bar)
         
         self.servers_table = QTableWidget(0, 4)
-        self.servers_table.setHorizontalHeaderLabels(["", "Server Name", "ID", "Member Since"])
+        self.servers_table.setHorizontalHeaderLabels(["", "Server Name", "ID", "Server Created"])
         self.servers_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.servers_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         self.servers_table.setColumnWidth(0, 52)
@@ -77,6 +77,10 @@ class ServersPage(QWidget):
         self.table_stack.addWidget(self.empty_state)     # index 1
         self.table_stack.addWidget(self.loading_overlay)  # index 2
         layout.addWidget(self.table_stack)
+        
+        QShortcut(QKeySequence("Ctrl+A"), self.servers_table, self.select_all_servers)
+        QShortcut(QKeySequence("Delete"), self.servers_table, self.leave_selected_servers)
+        QShortcut(QKeySequence("Ctrl+F"), self, lambda: self.servers_search.setFocus())
         
         self.servers_progress = QProgressBar()
         self.servers_progress.hide()
@@ -158,7 +162,7 @@ class ServersPage(QWidget):
 
             length = get_length_str(g['id'], None)
             member_since_item = QTableWidgetItem(length)
-            member_since_item.setToolTip("Derived from Server ID")
+            member_since_item.setToolTip("Server creation date (derived from Server Snowflake ID)")
             member_since_item.setForeground(QBrush(QColor(TEXT_DIM)))
             member_since_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             self.servers_table.setItem(row, 3, member_since_item)

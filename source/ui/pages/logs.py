@@ -3,6 +3,7 @@ from PyQt5.QtGui import QCursor
 from PyQt5.QtCore import Qt, QSize
 import qtawesome as qta
 import time
+import discord_mass_cleanup as dmc
 from ui.theme import *
 from ui.components import SectionHeader
 
@@ -66,8 +67,9 @@ class LogsPage(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Export Log", "cleanup_log.txt", "Text Files (*.txt)")
         if path:
             try:
+                sanitized = dmc.sanitize_token(self.log_textbox.toPlainText())
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write(self.log_textbox.toPlainText())
+                    f.write(sanitized)
                 self.log_msg(f"Log exported to {path}", "success")
             except Exception as e:
                 self.log_msg(f"Failed to export log: {e}", "error")

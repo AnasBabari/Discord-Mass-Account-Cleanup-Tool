@@ -126,13 +126,20 @@ class NotificationsPage(QWidget):
         self.read_worker.finished.connect(self.read_worker.deleteLater)
         self.read_worker.finished.connect(lambda: setattr(self, "read_worker", None))
         self.read_worker.progress_signal.connect(lambda msg: self.log_msg_signal.emit(msg, "info"))
+        self.read_worker.chunk_progress_signal.connect(self.on_chunk_progress)
         self.read_worker.finished_signal.connect(self.on_read_finished)
         self.read_worker.start()
+
+    def on_chunk_progress(self, current, total):
+        if total > 0:
+            self.read_notifs_progress.setRange(0, total)
+            self.read_notifs_progress.setValue(current)
 
     def on_read_finished(self, success, failed, err):
         self.read_notifs_btn.setEnabled(True)
         self.read_notifs_btn.setText("  Mark All Read")
         self.read_notifs_progress.hide()
+        self.read_notifs_progress.setRange(0, 0)
         if err:
             self.log_msg_signal.emit(f"[-] ERR: {err}", "error")
             self.action_finished.emit(f"Error: {err}", "error")
@@ -147,3 +154,4 @@ class NotificationsPage(QWidget):
         self.read_notifs_btn.setEnabled(True)
         self.read_notifs_btn.setText("  Mark All Read")
         self.read_notifs_progress.hide()
+        self.read_notifs_progress.setRange(0, 0)

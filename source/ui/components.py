@@ -5,7 +5,7 @@ import qtawesome as qta
 from ui.theme import *
 
 def get_length_str(snowflake_id, fallback_timestamp=None):
-    from datetime import datetime
+    from datetime import datetime, timezone
     dt = None
     if fallback_timestamp:
         try:
@@ -14,13 +14,12 @@ def get_length_str(snowflake_id, fallback_timestamp=None):
             pass
     if not dt and snowflake_id and str(snowflake_id).isdigit():
         ms = (int(snowflake_id) >> 22) + 1420070400000
-        dt = datetime.fromtimestamp(ms / 1000.0)
+        dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
     if not dt:
         return "Unknown"
-    # Normalize to naive datetime to avoid aware/naive comparison crash
-    if dt.tzinfo is not None:
-        dt = dt.replace(tzinfo=None)
-    now = datetime.now()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
     diff = now - dt
     days = diff.days
     if days < 0: return "0 days"
@@ -183,6 +182,17 @@ class ToastOverlay(QFrame):
         self.slide_out_anim.finished.connect(self._on_fade_out_finished)
         self.slide_out_anim.start()
         
+    def reposition(self):
+        if not self.parent():
+            return
+        parent_rect = self.parent().rect()
+        target_x = parent_rect.width() - self.width() - 24
+        target_y = 48
+        if getattr(self, "slide_anim", None) and self.slide_anim.state() == QPropertyAnimation.Running:
+            self.slide_anim.setEndValue(QPoint(target_x, target_y))
+        else:
+            self.move(target_x, target_y)
+
     def _on_fade_out_finished(self):
         self.hide()
         self._process_queue()
