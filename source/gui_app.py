@@ -89,49 +89,73 @@ class MainWindow(QMainWindow):
         # ── Sidebar ─────────────────────────────────────────────────────────
         self.sidebar = QWidget()
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(210)
+        self.sidebar.setFixedWidth(230)
         sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(16, 24, 16, 20)
+        sidebar_layout.setContentsMargins(16, 20, 16, 20)
         sidebar_layout.setSpacing(4)
         
         brand_frame = QFrame()
-        brand_frame.setStyleSheet(f"""
-            QFrame {{
+        brand_frame.setObjectName("BrandFrame")
+        brand_frame.setStyleSheet("""
+            QFrame#BrandFrame {
                 background: transparent;
-                border-bottom: 1px solid {BORDER};
-                padding-bottom: 16px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                padding-bottom: 12px;
                 margin-bottom: 8px;
-            }}
+            }
         """)
-        brand_layout = QVBoxLayout(brand_frame)
-        brand_layout.setContentsMargins(4, 0, 4, 16)
-        brand_layout.setSpacing(6)
+        brand_layout = QHBoxLayout(brand_frame)
+        brand_layout.setContentsMargins(0, 0, 0, 12)
+        brand_layout.setSpacing(12)
 
-        brand_row = QHBoxLayout()
-        brand_row.setSpacing(10)
-        app_icon = QLabel()
-        app_icon.setPixmap(qta.icon('mdi.broom', color=ACCENT).pixmap(QSize(22, 22)))
-        app_icon.setFixedSize(28, 28)
-        app_icon.setAlignment(Qt.AlignCenter)
-        brand_row.addWidget(app_icon)
+        # App Logo (36x36 rounded gradient)
+        app_logo = QLabel()
+        app_logo.setObjectName("AppLogo")
+        app_logo.setFixedSize(36, 36)
+        app_logo.setAlignment(Qt.AlignCenter)
+        app_logo.setStyleSheet("""
+            QLabel#AppLogo {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0284c7, stop:1 #38bdf8);
+                border-radius: 10px;
+            }
+        """)
+        app_logo.setPixmap(qta.icon('fa5b.discord', color='#ffffff').pixmap(QSize(20, 20)))
+        brand_layout.addWidget(app_logo)
 
-        app_title = QLabel("Cleanup Tool")
+        # App Title & Subtitle
+        title_layout = QVBoxLayout()
+        title_layout.setSpacing(2)
+        title_layout.setAlignment(Qt.AlignVCenter)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(6)
+        app_title = QLabel("Cleanup")
         app_title.setStyleSheet(f"""
             color: {TEXT_PRIMARY};
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 700;
-            letter-spacing: -0.3px;
+            letter-spacing: -0.2px;
         """)
-        brand_row.addWidget(app_title)
-        brand_row.addStretch()
-        brand_layout.addLayout(brand_row)
+        title_row.addWidget(app_title)
 
-        app_desc = QLabel()
-        app_desc.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px; padding-left: 38px;")
-        elided_desc = QFontMetrics(app_desc.font()).elidedText("Discord Account Manager", Qt.ElideRight, 130)
-        app_desc.setText(elided_desc)
-        brand_layout.addWidget(app_desc)
+        ver_pill = QLabel("v2.0")
+        ver_pill.setStyleSheet("""
+            background-color: rgba(255, 255, 255, 0.08);
+            color: #94a3b8;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 5px;
+            border-radius: 4px;
+        """)
+        title_row.addWidget(ver_pill)
+        title_row.addStretch()
+        title_layout.addLayout(title_row)
 
+        brand_subtitle = QLabel("Account Manager")
+        brand_subtitle.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px; font-weight: 500;")
+        title_layout.addWidget(brand_subtitle)
+
+        brand_layout.addLayout(title_layout)
         sidebar_layout.addWidget(brand_frame)
         
         nav_label = QLabel("• NAVIGATION")
@@ -146,9 +170,9 @@ class MainWindow(QMainWindow):
         
         self.nav_btns = {}
         nav_items = [
-            ("Servers",       'fa5s.server',       "servers"),
-            ("Friends",       'mdi.account-multiple',  "friends"),
-            ("Blocked",       'fa5s.user-slash',       "blocked"),
+            ("Servers",       'fa5s.server',        "servers"),
+            ("Friends",       'fa5s.user-friends',  "friends"),
+            ("Blocked",       'fa5s.user-slash',    "blocked"),
             ("Notifications", 'fa5s.bell',          "notifications"),
             ("Terminal",      'fa5s.terminal',      "logs")
         ]
