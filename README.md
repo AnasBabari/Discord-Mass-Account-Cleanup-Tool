@@ -28,9 +28,9 @@ This is an account-automation tool. Discord user-token automation and self-bot b
 
 ## Screenshots
 
-| Servers | Friends | Notifications |
-|---|---|---|
-| ![Servers](source/assets/servers.png) | ![Friends](source/assets/friends.png) | ![Notifications](source/assets/notifications.png) |
+| Servers | Friends | Blocked Users | Notifications |
+|---|---|---|---|
+| ![Servers](source/assets/servers.png) | ![Friends](source/assets/friends.png) | ![Blocked Users](source/assets/blocked.png) | ![Notifications](source/assets/notifications.png) |
 
 ## Architecture
 
