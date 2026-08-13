@@ -18,10 +18,10 @@ class NotificationsPage(QWidget):
         self.read_worker = None
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setContentsMargins(32, 24, 32, 32)
         layout.setSpacing(0)
         
-        header = SectionHeader('fa5s.bell', 'Notifications')
+        header = SectionHeader('fa5s.bell', 'Notifications Management')
         layout.addWidget(header)
         
         layout.addStretch()
@@ -30,36 +30,36 @@ class NotificationsPage(QWidget):
         card.setStyleSheet(f"""
             QFrame {{
                 background-color: {BG_CARD};
-                border: 1px solid {BORDER};
-                border-radius: 16px;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 18px;
             }}
         """)
-        card.setFixedWidth(440)
+        card.setFixedWidth(460)
 
         shadow = QGraphicsDropShadowEffect(card)
         shadow.setBlurRadius(40)
-        shadow.setColor(QColor(0, 0, 0, 60))
-        shadow.setOffset(0, 6)
+        shadow.setColor(QColor(0, 0, 0, 100))
+        shadow.setOffset(0, 8)
         card.setGraphicsEffect(shadow)
 
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(36, 32, 36, 32)
+        card_layout.setContentsMargins(36, 36, 36, 36)
         card_layout.setSpacing(0)
         card_layout.setAlignment(Qt.AlignCenter)
 
         bell_frame = QFrame()
-        bell_frame.setFixedSize(64, 64)
+        bell_frame.setFixedSize(68, 68)
         bell_frame.setStyleSheet(f"""
             QFrame {{
-                background-color: rgba(245, 158, 11, 0.1);
-                border-radius: 20px;
-                border: 1px solid rgba(245, 158, 11, 0.15);
+                background-color: rgba(245, 158, 11, 0.12);
+                border-radius: 22px;
+                border: 1px solid rgba(245, 158, 11, 0.25);
             }}
         """)
         bell_inner = QVBoxLayout(bell_frame)
         bell_inner.setContentsMargins(0, 0, 0, 0)
         bell_icon = QLabel()
-        bell_icon.setPixmap(qta.icon('fa5s.bell', color=WARNING).pixmap(QSize(28, 28)))
+        bell_icon.setPixmap(qta.icon('fa5s.bell', color=WARNING).pixmap(QSize(30, 30)))
         bell_icon.setAlignment(Qt.AlignCenter)
         bell_inner.addWidget(bell_icon)
 
@@ -69,27 +69,27 @@ class NotificationsPage(QWidget):
         bell_row.addStretch()
         card_layout.addLayout(bell_row)
 
-        card_layout.addSpacing(20)
+        card_layout.addSpacing(22)
 
-        notif_title = QLabel("Mark All as Read")
-        notif_title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 700;")
+        notif_title = QLabel("Mass Mark as Read")
+        notif_title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 20px; font-weight: 700; letter-spacing: -0.3px;")
         notif_title.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(notif_title)
 
         card_layout.addSpacing(8)
 
-        desc = QLabel("This will mark all DMs, group chats, and\nserver channels as read instantly.")
+        desc = QLabel("Instantly clear all unread notification badges and pings\nacross all servers, direct messages, and group channels.")
         desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 13px; line-height: 1.5;")
         desc.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(desc)
         
-        card_layout.addSpacing(24)
+        card_layout.addSpacing(26)
 
-        self.read_notifs_btn = QPushButton("  Mark All Read")
+        self.read_notifs_btn = QPushButton("  Mark All as Read")
         self.read_notifs_btn.setObjectName("ActionBtn")
         self.read_notifs_btn.setIcon(qta.icon('fa5s.check-double', color=BG_DARKEST))
         self.read_notifs_btn.setIconSize(QSize(16, 16))
-        self.read_notifs_btn.setFixedHeight(44)
+        self.read_notifs_btn.setFixedHeight(46)
         self.read_notifs_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.read_notifs_btn.clicked.connect(self.read_notifications)
         card_layout.addWidget(self.read_notifs_btn)
@@ -137,7 +137,7 @@ class NotificationsPage(QWidget):
 
     def on_read_finished(self, success, failed, err):
         self.read_notifs_btn.setEnabled(True)
-        self.read_notifs_btn.setText("  Mark All Read")
+        self.read_notifs_btn.setText("  Mark All as Read")
         self.read_notifs_progress.hide()
         self.read_notifs_progress.setRange(0, 0)
         if err:
@@ -152,6 +152,6 @@ class NotificationsPage(QWidget):
             self.read_worker.cancel()
         self.token = ""
         self.read_notifs_btn.setEnabled(True)
-        self.read_notifs_btn.setText("  Mark All Read")
+        self.read_notifs_btn.setText("  Mark All as Read")
         self.read_notifs_progress.hide()
         self.read_notifs_progress.setRange(0, 0)

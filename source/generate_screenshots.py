@@ -9,7 +9,6 @@ from gui_app import MainWindow
 from ui.theme import ACCENT, BG_DARKEST
 
 def generate_screenshots():
-    # Ensure offscreen rendering or proper DPI scaling
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     
     app = QApplication.instance() or QApplication(sys.argv)
@@ -26,7 +25,7 @@ def generate_screenshots():
     win.account_name = "DemoUser"
     win.account_name_label.setText("DemoUser")
     
-    # Set a nice avatar
+    # Set avatar
     avatar_pix = qta.icon('fa5s.user', color=BG_DARKEST).pixmap(QSize(24, 24))
     win.account_avatar.setPixmap(avatar_pix)
 
@@ -44,6 +43,9 @@ def generate_screenshots():
         {"id": "392860514930615248", "name": "Tech News & Discussion", "owner": False},
         {"id": "281759403829504137", "name": "Study & Productivity", "owner": False},
     ]
+    win.servers_page.stat_total.set_value("7")
+    win.servers_page.stat_leavable.set_value("7")
+    win.servers_page.stat_owned.set_value("0")
     win.servers_page.populate_table()
     win.servers_page.servers_table.item(0, 0).setCheckState(Qt.Checked)
     win.servers_page.servers_table.item(2, 0).setCheckState(Qt.Checked)
@@ -67,6 +69,7 @@ def generate_screenshots():
         {"id": "556019283746501928", "user": {"global_name": "Arthur Dent", "username": "adent42"}, "since": "2023-06-25T16:30:00Z"},
         {"id": "647019283746501928", "user": {"global_name": "Ada Lovelace", "username": "adalove"}, "since": "2019-12-01T10:00:00Z"},
     ]
+    win.friends_page.stat_total.set_value("6")
     win.friends_page.populate_table()
     win.friends_page.friends_table.item(0, 0).setCheckState(Qt.Checked)
     win.friends_page.friends_table.item(1, 0).setCheckState(Qt.Checked)
@@ -88,6 +91,7 @@ def generate_screenshots():
         {"id": "334455667788990011", "user": {"global_name": "Steam Gift Card DM", "username": "steam_giftcards_dm"}},
         {"id": "445566778899001122", "user": {"global_name": "Phishing Bot Support", "username": "discord_mod_support"}},
     ]
+    win.blocked_page.stat_total.set_value("4")
     win.blocked_page.populate_table()
     win.blocked_page.blocked_table.item(0, 0).setCheckState(Qt.Checked)
     win.blocked_page.blocked_table.item(1, 0).setCheckState(Qt.Checked)

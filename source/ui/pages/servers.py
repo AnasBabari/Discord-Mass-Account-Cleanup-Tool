@@ -1,9 +1,9 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QStackedWidget, QLabel, QShortcut
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QStackedWidget, QLabel, QShortcut, QFrame
 from PyQt5.QtGui import QCursor, QColor, QBrush, QKeySequence
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
 from ui.theme import *
-from ui.components import SectionHeader, StatBadge, LoadingOverlay, get_length_str
+from ui.components import SectionHeader, StatBadge, StatCard, LoadingOverlay, get_length_str
 from workers import FetchServersWorker, LeaveServersWorker
 
 class ServersPage(QWidget):
@@ -15,47 +15,61 @@ class ServersPage(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.token = ""
         self.servers_data = []
+        self.raw_guilds_data = []
         self.worker_tracker = worker_tracker or (lambda worker: worker)
         self.servers_worker = None
         self.leave_worker = None
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 44)
-        layout.setSpacing(16)
+        layout.setContentsMargins(32, 24, 32, 32)
+        layout.setSpacing(14)
         
-        header = SectionHeader('fa5s.server', 'Servers')
+        header = SectionHeader('fa5s.server', 'Servers Management')
         layout.addWidget(header)
+
+        # ── KPI Stat Cards Bar ──────────────────────────────────────────────
+        stats_bar = QHBoxLayout()
+        stats_bar.setSpacing(12)
+
+        self.stat_total = StatCard("Total Servers", "0", "fa5s.server", ACCENT)
+        self.stat_leavable = StatCard("Leavable", "0", "fa5s.sign-out-alt", WARNING)
+        self.stat_owned = StatCard("Protected Owned", "0", "fa5s.crown", SUCCESS)
+
+        stats_bar.addWidget(self.stat_total)
+        stats_bar.addWidget(self.stat_leavable)
+        stats_bar.addWidget(self.stat_owned)
+        layout.addLayout(stats_bar)
         
+        # ── Search Bar & Filter ─────────────────────────────────────────────
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
 
         self.servers_search = QLineEdit()
-        self.servers_search.setPlaceholderText("Search servers...")
-        self.servers_search.setFixedHeight(38)
+        self.servers_search.setPlaceholderText("Search servers by name or ID... (Ctrl+F)")
+        self.servers_search.setFixedHeight(40)
         self.servers_search.addAction(qta.icon('fa5s.search', color=TEXT_DIM), QLineEdit.LeadingPosition)
         self.servers_search.textChanged.connect(self.filter_servers)
         top_bar.addWidget(self.servers_search)
         
-        top_bar.addStretch()
-
         self.servers_status = StatBadge()
         self.servers_status.setText("Selected: 0 / 0")
         top_bar.addWidget(self.servers_status)
         layout.addLayout(top_bar)
         
+        # ── Servers Table ───────────────────────────────────────────────────
         self.servers_table = QTableWidget(0, 4)
         self.servers_table.setHorizontalHeaderLabels(["", "Server Name", "ID", "Server Created"])
         self.servers_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.servers_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self.servers_table.setColumnWidth(0, 52)
-        self.servers_table.setColumnWidth(3, 120)
+        self.servers_table.setColumnWidth(0, 48)
+        self.servers_table.setColumnWidth(3, 140)
         self.servers_table.setColumnHidden(2, True)
         self.servers_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.servers_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.servers_table.setShowGrid(False)
         self.servers_table.setAlternatingRowColors(False)
         self.servers_table.verticalHeader().setVisible(False)
-        self.servers_table.verticalHeader().setDefaultSectionSize(46)
+        self.servers_table.verticalHeader().setDefaultSectionSize(48)
         self.servers_table.cellClicked.connect(self.servers_table_clicked)
         
         # Empty state for "no servers"
@@ -86,8 +100,9 @@ class ServersPage(QWidget):
         self.servers_progress.hide()
         layout.addWidget(self.servers_progress)
         
+        # ── Controls Footer ─────────────────────────────────────────────────
         controls = QHBoxLayout()
-        controls.setSpacing(10)
+        controls.setSpacing(12)
 
         self.sel_all_servers_btn = QPushButton("  Select All")
         self.sel_all_servers_btn.setObjectName("GhostBtn")
@@ -101,7 +116,7 @@ class ServersPage(QWidget):
         
         self.leave_servers_btn = QPushButton("  Leave Selected")
         self.leave_servers_btn.setObjectName("DangerBtn")
-        self.leave_servers_btn.setIcon(qta.icon('fa5s.sign-out-alt', color=DANGER))
+        self.leave_servers_btn.setIcon(qta.icon('fa5s.sign-out-alt', color="#ffffff"))
         self.leave_servers_btn.setIconSize(QSize(14, 14))
         self.leave_servers_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.leave_servers_btn.clicked.connect(self.leave_selected_servers)
@@ -113,7 +128,6 @@ class ServersPage(QWidget):
         self.token = token
 
     def fetch_data(self):
-        # Show the loading splash
         self.table_stack.setCurrentIndex(2)
         self.loading_overlay.set_status("Fetching servers...")
         self.loading_overlay.set_detail("")
@@ -130,17 +144,21 @@ class ServersPage(QWidget):
             self.empty_label.setText(f"Failed to load servers: {err}")
             self.table_stack.setCurrentIndex(1)
             return
+        self.raw_guilds_data = guilds
         self.servers_data = [g for g in guilds if not g.get("owner")]
+        owned_count = len(guilds) - len(self.servers_data)
+
+        self.stat_total.set_value(len(guilds))
+        self.stat_leavable.set_value(len(self.servers_data))
+        self.stat_owned.set_value(owned_count)
+
         self.log_msg_signal.emit(f"Loaded {len(guilds)} servers ({len(self.servers_data)} leavable)", "success")
         if not self.servers_data:
             self.empty_label.setText("No leavable servers found.")
             self.table_stack.setCurrentIndex(1)
         else:
-            # Populate table and reveal immediately (no member data fetching)
             self.populate_table()
             self.table_stack.setCurrentIndex(0)
-
-
 
     def populate_table(self):
         self.servers_table.setSortingEnabled(False)
@@ -154,13 +172,14 @@ class ServersPage(QWidget):
             cb.setCheckState(Qt.Unchecked)
             self.servers_table.setItem(row, 0, cb)
             
-            name_item = QTableWidgetItem(g['name'])
+            name_item = QTableWidgetItem(g.get('name', 'Unknown'))
             name_item.setForeground(QBrush(QColor(TEXT_PRIMARY)))
+            name_item.setIcon(qta.icon('fa5b.discord', color=ACCENT))
             self.servers_table.setItem(row, 1, name_item)
 
-            self.servers_table.setItem(row, 2, QTableWidgetItem(g['id']))
+            self.servers_table.setItem(row, 2, QTableWidgetItem(g.get('id', '')))
 
-            length = get_length_str(g['id'], None)
+            length = get_length_str(g.get('id'), None)
             member_since_item = QTableWidgetItem(length)
             member_since_item.setToolTip("Server creation date (derived from Server Snowflake ID)")
             member_since_item.setForeground(QBrush(QColor(TEXT_DIM)))
@@ -173,10 +192,13 @@ class ServersPage(QWidget):
     def filter_servers(self, text):
         for i in range(self.servers_table.rowCount()):
             item = self.servers_table.item(i, 1)
+            id_item = self.servers_table.item(i, 2)
             if item is None:
                 continue
             name = item.text().lower()
-            self.servers_table.setRowHidden(i, text.lower() not in name)
+            s_id = id_item.text().lower() if id_item else ""
+            self.servers_table.setRowHidden(i, text.lower() not in name and text.lower() not in s_id)
+        self.update_status()
 
     def servers_table_clicked(self, row, col):
         if col != 0:
@@ -188,6 +210,10 @@ class ServersPage(QWidget):
         selected = sum(1 for i in range(self.servers_table.rowCount()) if self.servers_table.item(i, 0).checkState() == Qt.Checked)
         total = self.servers_table.rowCount()
         self.servers_status.setText(f"Selected: {selected} / {total}")
+        if selected > 0:
+            self.leave_servers_btn.setText(f"  Leave Selected ({selected})")
+        else:
+            self.leave_servers_btn.setText("  Leave Selected")
 
     def select_all_servers(self):
         visible_rows = [i for i in range(self.servers_table.rowCount()) if not self.servers_table.isRowHidden(i)]
@@ -246,4 +272,8 @@ class ServersPage(QWidget):
         self.token = ""
         self.servers_table.setRowCount(0)
         self.servers_data = []
+        self.raw_guilds_data = []
+        self.stat_total.set_value("0")
+        self.stat_leavable.set_value("0")
+        self.stat_owned.set_value("0")
         self.update_status()

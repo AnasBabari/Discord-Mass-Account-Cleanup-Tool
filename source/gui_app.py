@@ -155,6 +155,7 @@ class MainWindow(QMainWindow):
         
         for text, icon_name, ref in nav_items:
             btn = QPushButton(f"  {text}")
+            btn.setObjectName("NavBtn")
             btn.setIcon(qta.icon(icon_name, color=TEXT_SECONDARY))
             btn.setIconSize(QSize(16, 16))
             btn.setCheckable(True)

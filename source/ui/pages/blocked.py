@@ -3,7 +3,7 @@ from PyQt5.QtGui import QCursor, QColor, QBrush, QKeySequence
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
 from ui.theme import *
-from ui.components import SectionHeader, LoadingOverlay
+from ui.components import SectionHeader, StatBadge, StatCard, LoadingOverlay
 from workers import FetchBlockedWorker, UnblockUsersWorker
 
 class BlockedPage(QWidget):
@@ -20,45 +20,53 @@ class BlockedPage(QWidget):
         self.unblock_worker = None
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 44)
-        layout.setSpacing(16)
+        layout.setContentsMargins(32, 24, 32, 32)
+        layout.setSpacing(14)
         
-        header = SectionHeader('fa5s.user-slash', 'Blocked Users')
+        header = SectionHeader('fa5s.user-slash', 'Blocked Users Management')
         layout.addWidget(header)
+
+        # ── KPI Stat Cards Bar ──────────────────────────────────────────────
+        stats_bar = QHBoxLayout()
+        stats_bar.setSpacing(12)
+
+        self.stat_total = StatCard("Total Blocked", "0", "fa5s.user-slash", DANGER)
+        self.stat_selected = StatCard("Selected", "0", "fa5s.check-circle", SUCCESS)
+
+        stats_bar.addWidget(self.stat_total)
+        stats_bar.addWidget(self.stat_selected)
+        layout.addLayout(stats_bar)
         
+        # ── Search Bar & Filter ─────────────────────────────────────────────
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
 
         self.blocked_search = QLineEdit()
-        self.blocked_search.setPlaceholderText("Search blocked users...")
-        self.blocked_search.setFixedHeight(38)
+        self.blocked_search.setPlaceholderText("Search blocked users by name or ID... (Ctrl+F)")
+        self.blocked_search.setFixedHeight(40)
         self.blocked_search.addAction(qta.icon('fa5s.search', color=TEXT_DIM), QLineEdit.LeadingPosition)
         self.blocked_search.textChanged.connect(self.filter_blocked)
         top_bar.addWidget(self.blocked_search)
         
-        top_bar.addStretch()
-
-        self.blocked_status = QLabel("Selected: 0 / 0")
-        self.blocked_status.setStyleSheet(f"color: {TEXT_DIM}; font-size: 13px;")
+        self.blocked_status = StatBadge()
         self.blocked_status.setText("Selected: 0 / 0")
         top_bar.addWidget(self.blocked_status)
         layout.addLayout(top_bar)
         
-        self.blocked_table = QTableWidget()
-        self.blocked_table.setColumnCount(4)
+        # ── Blocked Table ───────────────────────────────────────────────────
+        self.blocked_table = QTableWidget(0, 4)
         self.blocked_table.setHorizontalHeaderLabels(["", "User", "ID", "Global Name"])
         self.blocked_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self.blocked_table.setColumnWidth(0, 40)
+        self.blocked_table.setColumnWidth(0, 48)
         self.blocked_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.blocked_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.blocked_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.blocked_table.verticalHeader().setVisible(False)
+        self.blocked_table.verticalHeader().setDefaultSectionSize(48)
         self.blocked_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.blocked_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.blocked_table.setShowGrid(False)
         self.blocked_table.cellClicked.connect(self.blocked_table_clicked)
-        self.blocked_table.verticalHeader().setVisible(False)
-        self.blocked_table.verticalHeader().setDefaultSectionSize(46)
         
         # Empty state
         self.empty_state = QWidget()
@@ -88,8 +96,9 @@ class BlockedPage(QWidget):
         self.blocked_progress.hide()
         layout.addWidget(self.blocked_progress)
         
+        # ── Controls Footer ─────────────────────────────────────────────────
         controls = QHBoxLayout()
-        controls.setSpacing(10)
+        controls.setSpacing(12)
 
         self.sel_all_blocked_btn = QPushButton("  Select All")
         self.sel_all_blocked_btn.setObjectName("GhostBtn")
@@ -103,7 +112,7 @@ class BlockedPage(QWidget):
         
         self.unblock_btn = QPushButton("  Unblock Selected")
         self.unblock_btn.setObjectName("DangerBtn")
-        self.unblock_btn.setIcon(qta.icon('fa5s.unlock', color=DANGER))
+        self.unblock_btn.setIcon(qta.icon('fa5s.unlock', color="#ffffff"))
         self.unblock_btn.setIconSize(QSize(14, 14))
         self.unblock_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.unblock_btn.clicked.connect(self.unblock_selected)
@@ -115,7 +124,6 @@ class BlockedPage(QWidget):
         self.token = token
 
     def fetch_data(self):
-        # Show loading splash
         self.table_stack.setCurrentIndex(2)
         self.loading_overlay.set_status("Fetching blocked users...")
         self.log_msg_signal.emit("Fetching blocked user list...", "info")
@@ -132,6 +140,7 @@ class BlockedPage(QWidget):
             self.table_stack.setCurrentIndex(1)
             return
         self.blocked_data = users
+        self.stat_total.set_value(len(self.blocked_data))
         self.log_msg_signal.emit(f"Loaded {len(self.blocked_data)} blocked users", "success")
         if not self.blocked_data:
             self.empty_label.setText("No blocked users to display.")
@@ -153,15 +162,16 @@ class BlockedPage(QWidget):
             self.blocked_table.setItem(row, 0, cb)
             
             user_obj = rel.get("user", {})
-            username = user_obj.get("username", "Unknown")
+            username = "@" + user_obj.get("username", "Unknown")
             name_item = QTableWidgetItem(username)
             name_item.setForeground(QBrush(QColor(TEXT_PRIMARY)))
+            name_item.setIcon(qta.icon('fa5s.ban', color=DANGER))
             self.blocked_table.setItem(row, 1, name_item)
 
             self.blocked_table.setItem(row, 2, QTableWidgetItem(rel.get("id", "")))
 
             global_name = user_obj.get("global_name", "")
-            gn_item = QTableWidgetItem(global_name)
+            gn_item = QTableWidgetItem(global_name if global_name else "—")
             gn_item.setForeground(QBrush(QColor(TEXT_PRIMARY if global_name else TEXT_DIM)))
             self.blocked_table.setItem(row, 3, gn_item)
             
@@ -170,10 +180,15 @@ class BlockedPage(QWidget):
     def filter_blocked(self, text):
         for i in range(self.blocked_table.rowCount()):
             item = self.blocked_table.item(i, 1)
+            id_item = self.blocked_table.item(i, 2)
+            gn_item = self.blocked_table.item(i, 3)
             if item is None:
                 continue
             name = item.text().lower()
-            self.blocked_table.setRowHidden(i, text.lower() not in name)
+            u_id = id_item.text().lower() if id_item else ""
+            gn = gn_item.text().lower() if gn_item else ""
+            self.blocked_table.setRowHidden(i, text.lower() not in name and text.lower() not in u_id and text.lower() not in gn)
+        self.update_status()
 
     def blocked_table_clicked(self, row, col):
         if col != 0:
@@ -185,6 +200,11 @@ class BlockedPage(QWidget):
         selected = sum(1 for i in range(self.blocked_table.rowCount()) if self.blocked_table.item(i, 0).checkState() == Qt.Checked)
         total = self.blocked_table.rowCount()
         self.blocked_status.setText(f"Selected: {selected} / {total}")
+        self.stat_selected.set_value(selected)
+        if selected > 0:
+            self.unblock_btn.setText(f"  Unblock Selected ({selected})")
+        else:
+            self.unblock_btn.setText("  Unblock Selected")
 
     def select_all_blocked(self):
         visible_rows = [i for i in range(self.blocked_table.rowCount()) if not self.blocked_table.isRowHidden(i)]
@@ -243,4 +263,6 @@ class BlockedPage(QWidget):
         self.token = ""
         self.blocked_table.setRowCount(0)
         self.blocked_data = []
+        self.stat_total.set_value("0")
+        self.stat_selected.set_value("0")
         self.update_status()
