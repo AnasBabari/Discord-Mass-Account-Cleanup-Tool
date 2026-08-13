@@ -145,7 +145,7 @@ class NotificationsPage(QWidget):
             self.action_finished.emit(f"Error: {err}", "error")
         else:
             self.log_msg_signal.emit(f"COMPLETE. READ: {success}, FAIL: {failed}", "success")
-        self.action_finished.emit(f"Marked {success} channels as read.", "info")
+            self.action_finished.emit(f"Marked {success} channels as read.", "success")
 
     def clear(self):
         if self.read_worker is not None and hasattr(self.read_worker, "cancel"):

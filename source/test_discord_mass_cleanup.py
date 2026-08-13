@@ -474,9 +474,11 @@ def test_mass_remove_friends_empty_selection(mock_get_friends, mock_input, capsy
 @patch("discord_mass_cleanup.check_token")
 @patch("discord_mass_cleanup.mass_leave_servers")
 @patch("discord_mass_cleanup.mass_remove_friends")
+@patch("discord_mass_cleanup.mass_unblock_users")
 @patch("discord_mass_cleanup.mass_read_notifications")
 def test_main_menu(
     mock_read_notifs,
+    mock_unblock,
     mock_remove,
     mock_leave,
     mock_check,
@@ -484,18 +486,20 @@ def test_main_menu(
     mock_input,
     capsys,
 ):
-    mock_get_masked_input.return_value = "my_token"
+    mock_get_masked_input.side_effect = ["my_token", "my_token_2"]
     mock_check.return_value = True
-    # choice 1, 2, 3, 4, invalid choice, q
-    mock_input.side_effect = ["1", "2", "3", "9", "q"]
+    # choice 1, 2, 3, 4, invalid choice, t (switch account), q
+    mock_input.side_effect = ["1", "2", "3", "4", "9", "t", "q"]
 
     dmc.main()
 
     mock_leave.assert_called_once_with("my_token")
     mock_remove.assert_called_once_with("my_token")
+    mock_unblock.assert_called_once_with("my_token")
     mock_read_notifs.assert_called_once_with("my_token")
     captured = capsys.readouterr().out
     assert "Invalid choice" in captured
+    assert "Logging out..." in captured
     assert "Exiting..." in captured
 
 
@@ -974,3 +978,63 @@ def test_make_api_request_non_timeout_error(mock_responses):
     )
     with pytest.raises(requests.RequestException, match="Connection failed"):
         dmc._make_api_request("GET", "/users/@me/guilds", "token", max_retries=2)
+
+
+@patch("builtins.input", side_effect=["all", "yes"])
+@patch("discord_mass_cleanup.get_blocked_users")
+@patch("discord_mass_cleanup.unblock_user", return_value=(204, ""))
+def test_mass_unblock_users_success(mock_unblock, mock_get, mock_in, capsys):
+    mock_get.return_value = [{"id": "1", "user": {"username": "spammer"}}]
+    dmc.mass_unblock_users("token")
+    captured = capsys.readouterr().out
+    assert "Unblocked: spammer" in captured
+    assert "Done — unblocked 1, failed 0." in captured
+
+
+@patch("discord_mass_cleanup.get_blocked_users", return_value=[])
+def test_mass_unblock_users_empty(mock_get, capsys):
+    dmc.mass_unblock_users("token")
+    assert "No blocked users found." in capsys.readouterr().out
+
+
+@patch("builtins.input", return_value="q")
+@patch("discord_mass_cleanup.get_blocked_users")
+def test_mass_unblock_users_cancel(mock_get, mock_in, capsys):
+    mock_get.return_value = [{"id": "1", "user": {"username": "spammer"}}]
+    dmc.mass_unblock_users("token")
+    assert "Cancelled." in capsys.readouterr().out
+
+
+@patch("builtins.input", side_effect=["invalid", "yes"])
+@patch("discord_mass_cleanup.get_blocked_users")
+def test_mass_unblock_users_invalid_selection(mock_get, mock_in, capsys):
+    mock_get.return_value = [{"id": "1", "user": {"username": "spammer"}}]
+    dmc.mass_unblock_users("token")
+    assert "Invalid input" in capsys.readouterr().out
+
+
+@patch("builtins.input", side_effect=["all", "no"])
+@patch("discord_mass_cleanup.get_blocked_users")
+def test_mass_unblock_users_cancel_confirm(mock_get, mock_in, capsys):
+    mock_get.return_value = [{"id": "1", "user": {"username": "spammer"}}]
+    dmc.mass_unblock_users("token")
+    assert "Cancelled." in capsys.readouterr().out
+
+
+@patch("builtins.input", side_effect=["all", "yes"])
+@patch("discord_mass_cleanup.get_blocked_users")
+@patch("discord_mass_cleanup.unblock_user", return_value=(403, "Cloudflare IP Ban"))
+def test_mass_unblock_users_cf_ban(mock_unblock, mock_get, mock_in, capsys):
+    mock_get.return_value = [{"id": "1", "user": {"username": "spammer"}}]
+    dmc.mass_unblock_users("token")
+    assert "FATAL: Cloudflare has temporarily banned your IP" in capsys.readouterr().out
+
+
+@patch("builtins.input", side_effect=["all", "yes"])
+@patch("discord_mass_cleanup.get_blocked_users")
+@patch("discord_mass_cleanup.unblock_user", side_effect=Exception("UnblockErr"))
+def test_mass_unblock_users_exception(mock_unblock, mock_get, mock_in, capsys):
+    mock_get.return_value = [{"id": "1", "user": {"username": "spammer"}}]
+    dmc.mass_unblock_users("token")
+    assert "Error: UnblockErr" in capsys.readouterr().out
+

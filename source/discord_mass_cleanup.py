@@ -775,6 +775,97 @@ def mass_remove_friends(token: str) -> None:
     print(f"\nDone — removed {success}, failed {failed}.")
 
 
+def mass_unblock_users(token: str) -> None:
+    print("\nFetching blocked users…")
+    try:
+        all_blocked = get_blocked_users(token)
+    except ValueError as e:
+        print(e)
+        return
+    except NETWORK_ERROR_TYPES as e:
+        print(f"\n✗  Network/API error fetching blocked users: {e}")
+        return
+    except RuntimeError as e:
+        print(f"\n✗  Runtime error: {e}")
+        return
+
+    if not all_blocked:
+        print("No blocked users found.")
+        return
+
+    print(f"\nFound {len(all_blocked)} blocked user(s)\n")
+
+    col_w = max(len(u.get("user", {}).get("username", "Unknown")) for u in all_blocked) + 2
+    for i, u in enumerate(all_blocked, 1):
+        user_info = u.get("user", {})
+        display = user_info.get("global_name") or user_info.get("username", "Unknown")
+        print(f"  [{i:>3}]  {display:<{col_w}} (@{user_info.get('username', 'Unknown')})")
+
+    print("\nEnter users to unblock:")
+    print("  • Numbers / ranges  →  1,3,5-10,15")
+    print("  • All blocked       →  all")
+    print("  • Cancel            →  q\n")
+
+    raw = input("Selection > ").strip()
+
+    if raw.lower() == "q":
+        print("Cancelled.")
+        return
+
+    selected: list[dict] = []
+
+    if raw.lower() == "all":
+        selected = all_blocked[:]
+    else:
+        try:
+            indices = parse_selection(raw, len(all_blocked))
+            selected = [all_blocked[i - 1] for i in indices]
+        except ValueError:
+            print("Invalid input — use numbers, ranges (e.g. 2-5), or 'all'.")
+            return
+
+    if not selected:
+        print("Nothing selected.")
+        return
+
+    print(f"\nAbout to unblock {len(selected)} user(s):\n")
+    for u in selected:
+        user_info = u.get("user", {})
+        display = user_info.get("global_name") or user_info.get("username", "Unknown")
+        print(f"  –  {display} (@{user_info.get('username', 'Unknown')})")
+
+    confirm = input("\nType 'yes' to confirm: ").strip()
+    if confirm.lower() != "yes":
+        print("Cancelled.")
+        return
+
+    print()
+    success = failed = 0
+    for u in selected:
+        user_id = u["id"]
+        user_info = u.get("user", {})
+        display = user_info.get("global_name") or user_info.get("username", "Unknown")
+
+        try:
+            status, text = unblock_user(token, user_id)
+            if status == 204:
+                print(f"  ✓  Unblocked: {display}")
+                success += 1
+            else:
+                print(f"  ✗  Failed:    {display}  (HTTP {status} - {text})")
+                failed += 1
+                if "Cloudflare IP Ban" in text:
+                    print("\n  ⚠  FATAL: Cloudflare has temporarily banned your IP. Aborting.")
+                    break
+        except Exception as e:
+            print(f"  ✗  Failed:    {display}  (Error: {e})")
+            failed += 1
+
+        time.sleep(REQUEST_DELAY)
+
+    print(f"\nDone — unblocked {success}, failed {failed}.")
+
+
 def mass_read_notifications(token: str) -> None:
     print("\nFetching your unread notifications…")
     
@@ -922,7 +1013,8 @@ def main() -> None:
             print("\nMain Menu:")
             print("  [1] Mass Leave Servers")
             print("  [2] Mass Remove Friends")
-            print("  [3] Mass Read Notifications")
+            print("  [3] Mass Unblock Users")
+            print("  [4] Mass Read Notifications")
             print("  [t] Change Token / Switch Account")
             print("  [q] Quit\n")
 
@@ -933,6 +1025,8 @@ def main() -> None:
             elif choice == "2":
                 mass_remove_friends(token)
             elif choice == "3":
+                mass_unblock_users(token)
+            elif choice == "4":
                 mass_read_notifications(token)
             elif choice == "t":
                 print("\nLogging out...")
@@ -941,7 +1035,7 @@ def main() -> None:
                 print("Exiting...")
                 return
             else:
-                print("Invalid choice. Please select 1, 2, 3, t, or q.")
+                print("Invalid choice. Please select 1, 2, 3, 4, t, or q.")
 
 
 if __name__ == "__main__":
