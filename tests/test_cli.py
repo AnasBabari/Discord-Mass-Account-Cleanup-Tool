@@ -221,6 +221,6 @@ class TestMaskedInputReader:
 
     def test_get_masked_input_windows_import_error(self):
         with patch("sys.platform", "win32"), \
-             patch("builtins.__import__", side_effect=ImportError("No msvcrt")), \
+             patch.dict(sys.modules, {"msvcrt": None}), \
              patch("getpass.getpass", return_value="fallback_pass"):
             assert get_masked_input("Password: ") == "fallback_pass"
