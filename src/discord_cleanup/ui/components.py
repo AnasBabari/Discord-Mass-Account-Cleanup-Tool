@@ -1,0 +1,375 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+import qtawesome as qta
+from PyQt5.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer
+from PyQt5.QtGui import QColor, QCursor
+from PyQt5.QtWidgets import (
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from discord_cleanup.ui.theme import (
+    ACCENT,
+    BG_CARD,
+    DANGER,
+    SUCCESS,
+    TEXT_DIM,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
+    WARNING,
+)
+
+
+def get_length_str(snowflake_id: str | int | None, fallback_timestamp: str | None = None) -> str:
+    """Calculate account/friendship age string from snowflake ID or ISO timestamp."""
+    dt: datetime | None = None
+    if fallback_timestamp:
+        try:
+            dt = datetime.fromisoformat(fallback_timestamp.replace("Z", "+00:00"))
+        except (ValueError, TypeError, OverflowError, OSError):
+            pass
+
+    if not dt and snowflake_id and str(snowflake_id).isdigit():
+        try:
+            ms = (int(snowflake_id) >> 22) + 1420070400000
+            if 0 < ms < 10000000000000:
+                dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        except (ValueError, TypeError, OverflowError, OSError):
+            pass
+
+    if not dt:
+        return "Unknown"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    diff = now - dt
+    days = diff.days
+    if days < 0:
+        return "0 days"
+    if days < 30:
+        return f"{days} days"
+    if days < 365:
+        return f"{days // 30} months"
+    years = days // 365
+    return f"{years} year{'s' if years > 1 else ''}"
+
+
+class GlassCard(QFrame):
+    """Elevated surface container with rounded corners and subtle drop shadow."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_CARD};
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                border-radius: 14px;
+            }}
+        """)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(24)
+        shadow.setColor(QColor(0, 0, 0, 80))
+        shadow.setOffset(0, 4)
+        self.setGraphicsEffect(shadow)
+
+
+class StatCard(QFrame):
+    """KPI summary widget displaying metric title, count value, and icon."""
+
+    def __init__(
+        self,
+        title: str,
+        initial_val: str = "0",
+        icon_name: str | None = None,
+        icon_color: str = ACCENT,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {BG_CARD};
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
+            }}
+        """)
+        self.setFixedHeight(72)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(12)
+
+        if icon_name:
+            icon_box = QFrame()
+            icon_box.setFixedSize(38, 38)
+            icon_box.setStyleSheet("""
+                QFrame {
+                    background-color: rgba(56, 189, 248, 0.08);
+                    border: 1px solid rgba(56, 189, 248, 0.15);
+                    border-radius: 10px;
+                }
+            """)
+            ib_layout = QVBoxLayout(icon_box)
+            ib_layout.setContentsMargins(0, 0, 0, 0)
+            icon_lbl = QLabel()
+            icon_lbl.setPixmap(qta.icon(icon_name, color=icon_color).pixmap(QSize(18, 18)))
+            icon_lbl.setAlignment(Qt.AlignCenter)
+            ib_layout.addWidget(icon_lbl)
+            layout.addWidget(icon_box)
+
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
+        text_layout.setAlignment(Qt.AlignVCenter)
+
+        self.title_lbl = QLabel(title.upper())
+        self.title_lbl.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 10px; font-weight: 700; "
+            f"letter-spacing: 0.6px; background: transparent; border: none;"
+        )
+        text_layout.addWidget(self.title_lbl)
+
+        self.val_lbl = QLabel(str(initial_val))
+        self.val_lbl.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 700; "
+            f"background: transparent; border: none;"
+        )
+        text_layout.addWidget(self.val_lbl)
+
+        layout.addLayout(text_layout)
+        layout.addStretch()
+
+    def set_value(self, val: Any) -> None:
+        self.val_lbl.setText(str(val))
+
+
+class LoadingOverlay(QWidget):
+    """Loading spinner and status indicator overlay."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background: transparent;")
+
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignCenter)
+        layout.setSpacing(16)
+
+        self.spinner_label = QLabel()
+        self.spinner_label.setFixedSize(48, 48)
+        self.spinner_label.setAlignment(Qt.AlignCenter)
+        self.spinner_label.setPixmap(
+            qta.icon("mdi.loading", color=ACCENT, animation=qta.Spin(self.spinner_label)).pixmap(QSize(36, 36))
+        )
+        layout.addWidget(self.spinner_label, 0, Qt.AlignCenter)
+
+        self.status_label = QLabel("Loading...")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet(f"""
+            color: {TEXT_SECONDARY};
+            font-size: 14px;
+            font-weight: 600;
+            background: transparent;
+        """)
+        layout.addWidget(self.status_label, 0, Qt.AlignCenter)
+
+        self.detail_label = QLabel("")
+        self.detail_label.setAlignment(Qt.AlignCenter)
+        self.detail_label.setStyleSheet(f"""
+            color: {TEXT_DIM};
+            font-size: 12px;
+            font-weight: 400;
+            background: transparent;
+        """)
+        layout.addWidget(self.detail_label, 0, Qt.AlignCenter)
+
+    def set_status(self, text: str) -> None:
+        self.status_label.setText(text)
+
+    def set_detail(self, text: str) -> None:
+        self.detail_label.setText(text)
+
+
+class ToastOverlay(QFrame):
+    """Slide-in notification banner with automated queue processing and auto-dismiss."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("Toast")
+        self.setStyleSheet(f"""
+            QFrame#Toast {{
+                background-color: {BG_CARD};
+                border: 1px solid rgba(56, 189, 248, 0.3);
+                border-radius: 12px;
+                padding: 0px;
+            }}
+        """)
+        self.setFixedWidth(340)
+        self.hide()
+        self.queue: list[tuple[str, int, str]] = []
+        self.is_showing = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(12)
+
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(24, 24)
+        layout.addWidget(self.icon_label)
+
+        self.text_label = QLabel()
+        self.text_label.setWordWrap(True)
+        self.text_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 500;")
+        layout.addWidget(self.text_label, 1)
+
+        self.close_btn = QPushButton()
+        self.close_btn.setIcon(qta.icon("fa5s.times", color=TEXT_DIM))
+        self.close_btn.setIconSize(QSize(12, 12))
+        self.close_btn.setFixedSize(20, 20)
+        self.close_btn.setStyleSheet("background: transparent; border: none; border-radius: 4px;")
+        self.close_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.close_btn.clicked.connect(self._fade_out)
+        layout.addWidget(self.close_btn)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(36)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 8)
+        self.setGraphicsEffect(shadow)
+
+        self.dismiss_timer = QTimer()
+        self.dismiss_timer.setSingleShot(True)
+        self.dismiss_timer.timeout.connect(self._fade_out)
+
+    def show_message(self, message: str, duration: int = 3500, msg_type: str = "info") -> None:
+        self.queue.append((message, duration, msg_type))
+        if not self.is_showing:
+            self._process_queue()
+
+    def _process_queue(self) -> None:
+        if not self.queue:
+            self.is_showing = False
+            return
+
+        self.is_showing = True
+        message, duration, msg_type = self.queue.pop(0)
+
+        icon_map = {
+            "info": ("fa5s.check-circle", SUCCESS),
+            "error": ("fa5s.exclamation-circle", DANGER),
+            "warning": ("fa5s.exclamation-triangle", WARNING),
+            "success": ("fa5s.check-circle", SUCCESS),
+        }
+        icon_name, icon_color = icon_map.get(msg_type, icon_map["info"])
+        self.icon_label.setPixmap(qta.icon(icon_name, color=icon_color).pixmap(QSize(20, 20)))
+        self.text_label.setText(message)
+        self.adjustSize()
+
+        parent = self.parent()
+        if parent is None:
+            return
+        parent_rect = parent.rect()
+        target_x = parent_rect.width() - self.width() - 24
+        target_y = 36
+
+        self.move(parent_rect.width() + 10, target_y)
+        self.show()
+        self.raise_()
+
+        self.slide_anim = QPropertyAnimation(self, b"pos")
+        self.slide_anim.setDuration(350)
+        self.slide_anim.setStartValue(QPoint(parent_rect.width() + 10, target_y))
+        self.slide_anim.setEndValue(QPoint(target_x, target_y))
+        self.slide_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.slide_anim.start()
+
+        self.dismiss_timer.start(duration)
+
+    def _fade_out(self) -> None:
+        self.dismiss_timer.stop()
+        parent = self.parent()
+        if parent is None:
+            self.hide()
+            return
+        parent_rect = parent.rect()
+        self.slide_out_anim = QPropertyAnimation(self, b"pos")
+        self.slide_out_anim.setDuration(300)
+        self.slide_out_anim.setStartValue(self.pos())
+        self.slide_out_anim.setEndValue(QPoint(parent_rect.width() + 10, self.pos().y()))
+        self.slide_out_anim.setEasingCurve(QEasingCurve.InCubic)
+        self.slide_out_anim.finished.connect(self._on_fade_out_finished)
+        self.slide_out_anim.start()
+
+    def reposition(self) -> None:
+        parent = self.parent()
+        if not parent:
+            return
+        parent_rect = parent.rect()
+        target_x = parent_rect.width() - self.width() - 24
+        target_y = 36
+        if getattr(self, "slide_anim", None) and self.slide_anim.state() == QPropertyAnimation.Running:
+            self.slide_anim.setEndValue(QPoint(target_x, target_y))
+        else:
+            self.move(target_x, target_y)
+
+    def _on_fade_out_finished(self) -> None:
+        self.hide()
+        self._process_queue()
+
+
+class SectionHeader(QWidget):
+    """Reusable page section header."""
+
+    def __init__(self, icon_name: str, title: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 12)
+        layout.setSpacing(10)
+
+        icon_lbl = QLabel()
+        icon_lbl.setPixmap(qta.icon(icon_name, color=ACCENT).pixmap(QSize(22, 22)))
+        icon_lbl.setFixedSize(28, 28)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(icon_lbl)
+
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet(f"""
+            font-size: 20px;
+            font-weight: 700;
+            color: {TEXT_PRIMARY};
+            letter-spacing: -0.3px;
+        """)
+        layout.addWidget(title_lbl)
+        layout.addStretch()
+
+
+class StatBadge(QFrame):
+    """Small pill badge displaying a counter."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: rgba(56, 189, 248, 0.08);
+                border: 1px solid rgba(56, 189, 248, 0.2);
+                border-radius: 8px;
+                padding: 0px;
+            }
+        """)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(4)
+
+        self.label = QLabel("Selected: 0 / 0")
+        self.label.setStyleSheet(
+            f"color: {ACCENT}; font-weight: 600; font-size: 12px; border: none; background: transparent;"
+        )
+        layout.addWidget(self.label)
+
+    def setText(self, text: str) -> None:
+        self.label.setText(text)

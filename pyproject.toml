@@ -1,0 +1,118 @@
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "discord-mass-cleanup-tool"
+version = "2.1.0"
+description = "A robust Python desktop application and CLI for managing Discord account cleanups."
+readme = "README.md"
+authors = [
+    { name = "Anas Babari", email = "anas@example.com" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["discord", "cleanup", "pyqt5", "desktop-app", "async-workers"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "requests>=2.31.0",
+    "websocket-client>=1.8.0",
+    "keyring>=24.3.0",
+    "PyQt5>=5.15.10",
+    "qtawesome>=1.3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-qt>=4.4.0",
+    "pytest-cov>=5.0.0",
+    "responses>=0.25.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "types-requests>=2.31.0",
+    "pyinstaller>=6.6.0",
+]
+
+[project.scripts]
+discord-cleanup = "discord_cleanup.cli.main:main"
+discord-cleanup-gui = "discord_cleanup.ui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+discord_cleanup = ["ui/theme.qss", "ui/assets/*.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C",   # complexity
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501", # line length handled by formatter
+    "B008", # function calls in default arguments
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["discord_cleanup"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+files = [
+    "src/discord_cleanup/models",
+    "src/discord_cleanup/security",
+    "src/discord_cleanup/transport",
+    "src/discord_cleanup/api",
+    "src/discord_cleanup/gateway",
+    "src/discord_cleanup/logging",
+    "src/discord_cleanup/cli",
+]
+
+[tool.coverage.run]
+source = ["src/discord_cleanup"]
+omit = [
+    "src/discord_cleanup/ui/assets/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

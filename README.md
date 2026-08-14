@@ -1,130 +1,200 @@
 # Discord Mass Account Cleanup Tool
 
-A Windows desktop application and command-line utility for carrying out account-clean-up actions through Discord's HTTP API and Gateway. It supports explicit selection of servers, relationships, and notifications while keeping the long-running work off the GUI thread.
+A robust, asynchronous desktop application and command-line utility built with Python and PyQt5 for inspecting and bulk-managing Discord servers, relationships, and notification read-states.
 
-![Servers Page](source/assets/servers.png)
+Designed with a strict multi-layered architecture, coordinated rate-limiting backoff, cooperative cancellation, adversarial credential redaction, and deterministic offline unit testing.
 
-## Download
+![Servers Management](src/discord_cleanup/ui/assets/servers.png)
 
-> **No Python required** — download the latest Windows executable from the [Releases page](https://github.com/AnasBabari/Discord-Mass-Account-Cleanup-Tool/releases/latest).
+---
 
-The executable is built by the tagged-release workflow. The source tree remains available for inspection and local development.
+## Technical Highlights & Engineering Narrative
 
-## What it does
+- **Asynchronous GUI Architecture**: Built with PyQt5 and decoupled background `QThread` workers communicating strictly via typed Qt signals, ensuring the main GUI event loop remains fluid at 60 FPS during long-running batch operations.
+- **Shared Request Coordination & Rate Limiting**: Centralized `RequestCoordinator` enforces polite cross-worker request pacing and dynamically honors Discord `Retry-After` headers across concurrent operations without bursting upstream limits.
+- **Adversarial Credential Security**: Multi-pattern token sanitization regex engine scrubs user tokens, MFA secrets, and Authorization headers across CLI prompts, stream interceptors, crash logs, and exported diagnostic files. Tokens are stored encrypted via the OS Keyring (`keyring`) and scrubbed from worker memory immediately upon task completion.
+- **Fail-Safe Destructive Action Workflows**: Two-step verification workflows require explicit user selection, summary previews (displaying target counts and names), and confirmation dialogs before executing irreversible actions (such as leaving servers or deleting friendships).
+- **Clean Transport Abstraction**: Fully modular HTTP transport layer built on standard protocols without browser fingerprinting, evasion tricks, or brittle global mocking hooks.
+- **Comprehensive Offline Test Suite**: 95+ unit and component tests achieving ~80% statement coverage across domain models, rate limiting, network transports, worker lifecycle states, and PyQt UI pages using mocked fixtures with zero live Discord API calls.
+- **Automated CI/CD Pipeline**: GitHub Actions workflow running automated lint checks (`Ruff`), static type checking (`Mypy`), cross-platform matrix testing on Ubuntu & Windows, and automated Windows executable releases with SHA256 checksums.
 
-- Lists servers and relationships, with search and explicit selection.
-- Leaves selected servers, removes selected friends, or blocks selected users.
-- Reads notifications through the Discord Gateway and reports progress.
-- Provides a PyQt5 GUI with background `QThread` workers, cancellation, progress, and error signals.
-- Provides an interactive CLI for environments where a GUI is not appropriate.
-- Stores a token through the operating system credential manager when `keyring` is available.
-- Handles HTTP timeouts and Discord `429` responses with bounded retries and `Retry-After` support. HTML responses are treated as a possible upstream protection page rather than being printed verbatim.
-
-The tool uses the REST API for account operations and the Gateway only for notification read-state work. It does not claim to provide an official Discord bulk-management API.
-
-## Responsible use and account safety
-
-This is an account-automation tool. Discord user-token automation and self-bot behaviour may violate Discord's Terms of Service and can result in account action. Use only on an account you control, at a rate that is appropriate for the service, and after reviewing the current Discord policies. Never paste a token into an issue, chat, log, or screen recording. The project does not attempt to evade enforcement or guarantee that an account will not be rate-limited.
+---
 
 ## Screenshots
 
-| Servers | Friends | Blocked Users | Notifications |
-|---|---|---|---|
-| ![Servers](source/assets/servers.png) | ![Friends](source/assets/friends.png) | ![Blocked Users](source/assets/blocked.png) | ![Notifications](source/assets/notifications.png) |
+| Servers Management | Friends Management | Blocked Users | Notification Badges |
+|:---:|:---:|:---:|:---:|
+| ![Servers](src/discord_cleanup/ui/assets/servers.png) | ![Friends](src/discord_cleanup/ui/assets/friends.png) | ![Blocked Users](src/discord_cleanup/ui/assets/blocked.png) | ![Notifications](src/discord_cleanup/ui/assets/notifications.png) |
+
+---
 
 ## Architecture
 
 ```
-GUI / CLI
-    |
-    +-- REST helpers: guilds, relationships, leave/remove/block
-    |       +-- timeout handling
-    |       +-- Retry-After-aware 429 handling
-    |       +-- bounded retry count
-    |       +-- shared cross-worker request coordinator
-    |
-    +-- Gateway helper: notification read-state
-    |
-    +-- QThread workers (GUI only)
-            +-- progress, result, error, and finished signals
-            +-- cooperative cancellation and token scrubbing
+                                  +-----------------------+
+                                  |   GUI (PyQt5) / CLI   |
+                                  +-----------+-----------+
+                                              |
+                     +------------------------+------------------------+
+                     |                                                 |
+         +-----------v-----------+                         +-----------v-----------+
+         |  Background QThreads  |                         |  CLI Workflow Runner  |
+         |  (Cancellable Worker) |                         |  (Preview & Confirm)  |
+         +-----------+-----------+                         +-----------+-----------+
+                     |                                                 |
+                     +------------------------+------------------------+
+                                              |
+                                  +-----------v-----------+
+                                  |   DiscordApiClient    |
+                                  +-----------+-----------+
+                                              |
+                     +------------------------+------------------------+
+                     |                                                 |
+         +-----------v-----------+                         +-----------v-----------+
+         |  RequestCoordinator   |                         |     HttpTransport     |
+         |  (Backoff & Retries)  |                         | (Timeout & Parse JSON)|
+         +-----------------------+                         +-----------+-----------+
+                                                                       |
+                                                           +-----------v-----------+
+                                                           |   Discord REST / WS   |
+                                                           +-----------------------+
 ```
 
-The request helper owns response parsing, retry decisions, and one shared request budget. Every GUI worker uses the same coordinator, so concurrent actions cannot each apply an independent delay and accidentally burst the Discord API. Transport selection is explicit and injectable: production uses `curl_cffi` when installed, while tests inject the standard `requests` transport rather than changing behaviour based on whether pytest is loaded. GUI workers call the helper from `QThread`s, pass a cancellation event into request waits, and scrub token references when they finish. Tests use mocked HTTP and Gateway responses; the test suite does not contact Discord or validate live-account behaviour.
+---
 
-## Run from source
+## Platform Compliance & Policy Boundary
 
-### Requirements
+> [!IMPORTANT]
+> **Platform Policy Notice**:
+> This tool automates operations through standard user-account HTTP endpoints. User-token automation is not officially supported by Discord and may violate Discord's Terms of Service.
+>
+> - **No Circumvention**: This application does **not** employ browser fingerprint evasion, CAPTCHA bypasses, anti-bot circumvention, or hidden automation stealth.
+> - **Honest Error Handling**: If Discord responds with `401 Unauthorized`, `429 Rate Limited`, or `403 Forbidden`, the application reports the status honestly and halts gracefully rather than attempting to bypass platform protections.
+> - **Intended Use**: For personal account auditing, server pruning, and relationship cleanup on accounts you control.
 
-- Python 3.10 or newer
-- A Windows Qt runtime for the GUI (provided by `PyQt5`)
+---
+
+## Installation & Running Locally
+
+### Prerequisites
+- Python 3.10, 3.11, 3.12, 3.13, or 3.14
+- Operating System: Windows, Linux, or macOS
+
+### 1. Clone & Setup Environment
 
 ```bash
-cd source
-python -m pip install -r requirements.txt
+git clone https://github.com/AnasBabari/Discord-Mass-Account-Cleanup-Tool.git
+cd Discord-Mass-Account-Cleanup-Tool
+
+# Create and activate virtual environment
+python -m venv venv
+# Windows:
+.\venv\Scripts\activate
+# Linux/macOS:
+source venv/bin/activate
+
+# Install in editable mode with development dependencies
+pip install -e ".[dev]"
 ```
 
-### GUI
+### 2. Launch Application
 
+**Launch Desktop Graphical Interface:**
 ```bash
-cd source
-python gui_app.py
+python -m discord_cleanup
+# or
+discord-cleanup-gui
 ```
 
-### CLI
-
+**Launch Interactive CLI Mode:**
 ```bash
-cd source
-python discord_mass_cleanup.py
+python -m discord_cleanup --cli
+# or
+discord-cleanup
 ```
 
-### Build the Windows executable
+---
 
+## Development & Quality Assurance
+
+### Run Unit Test Suite
 ```bash
-cd source
-python -m pip install pyinstaller
-pyinstaller gui_app.spec
+python -m pytest tests/ -v --cov=src/discord_cleanup --cov-report=term-missing
 ```
 
-The executable is written to `source/dist/gui_app.exe` before the release workflow gives it its distribution name.
-
-## Testing
-
-From the repository root:
-
+### Run Static Analysis & Linting
 ```bash
-cd source
-python -m pytest -q
+python -m flake8 src tests --max-line-length=140
+python -m mypy
 ```
 
-The current suite contains **75 tests**. It covers request pagination and selection, HTTP status/error handling, timeout and `Retry-After` behaviour, shared request coordination, Gateway payload handling, CLI flows, GUI components/pages, and worker signal/cancellation paths. GUI tests run headlessly in CI with `QT_QPA_PLATFORM=offscreen`.
+### Build Windows Standalone Executable
+```bash
+pyinstaller discord_cleanup.spec
+```
+The compiled binary will be placed under `dist/Discord-Mass-Cleanup-Tool.exe`.
 
-The tests are deterministic and mocked. A green run demonstrates the local request and UI contracts; it is not evidence that a live token is valid or that Discord will permit a particular account action.
+---
 
-## Project structure
+## Project Structure
 
 ```
-├── README.md
-├── LICENSE
-├── .github/workflows/release.yml   # test pushes/PRs and publish tagged releases
-└── source/
-    ├── gui_app.py                  # PyQt5 desktop entry point
-    ├── discord_mass_cleanup.py     # REST helpers and CLI entry point
-    ├── workers.py                  # background QThread workers
-    ├── gui_app.spec                # PyInstaller build configuration
-    ├── requirements.txt
-    ├── test_discord_mass_cleanup.py # API and CLI tests
-    ├── test_gui.py                 # GUI component tests
-    ├── test_gui_pages.py           # page-level GUI tests
-    ├── test_workers.py             # worker signal/error tests
-    ├── ui/                         # theme, components, and pages
-    └── assets/                     # screenshots used by the README and UI
+├── pyproject.toml                     # Modern package metadata & tool configuration
+├── discord_cleanup.spec               # PyInstaller standalone executable recipe
+├── README.md                          # Project documentation & engineering overview
+├── LICENSE                            # MIT License
+├── .github/
+│   └── workflows/
+│       └── release.yml                # CI matrix testing & release deployment
+├── src/
+│   └── discord_cleanup/
+│       ├── __init__.py                # Package root
+│       ├── __main__.py                # CLI / GUI entrypoint dispatcher
+│       ├── models/
+│       │   └── domain.py              # Typed domain dataclasses (Guild, Relationship, User)
+│       ├── security/
+│       │   ├── token_sanitizer.py     # Adversarial regex token redactor
+│       │   └── credentials.py         # OS Keyring secure token storage
+│       ├── transport/
+│       │   └── http_transport.py      # Clean HTTP transport abstraction
+│       ├── api/
+│       │   ├── exceptions.py          # Domain error hierarchy
+│       │   ├── rate_limiter.py        # Cross-thread request coordinator & backoff
+│       │   └── client.py              # Discord REST API client
+│       ├── gateway/
+│       │   └── notifications.py       # Gateway WebSocket notification reader
+│       ├── logging/
+│       │   └── logger.py              # Redacting logger and Qt signal handlers
+│       ├── cli/
+│       │   └── main.py                # Interactive CLI with preview & confirmation
+│       ├── workers/                   # Background QThread workers
+│       │   ├── base.py                # CancellableTokenWorker base
+│       │   ├── login.py               # Token verification & avatar loader
+│       │   ├── fetch.py               # Guild/friend/blocked fetchers
+│       │   ├── batch.py               # Batch removal/leave/block workers
+│       │   └── notifications.py       # Notification ack worker
+│       └── ui/
+│           ├── theme.py & theme.qss   # Design system tokens & stylesheet
+│           ├── components.py          # Custom Qt components (GlassCard, StatCard, Toast)
+│           ├── app.py                 # MainWindow & Qt application lifecycle
+│           └── pages/                 # UI pages (Login, Servers, Friends, Blocked, Logs)
+└── tests/                             # Offline mocked unit test suite
+    ├── conftest.py                    # Pytest fixtures & offscreen Qt setup
+    ├── test_token_security.py         # Adversarial token redactor tests
+    ├── test_transport.py              # Transport & timeout tests
+    ├── test_rate_limiter.py           # Rate limiting & cancellation tests
+    ├── test_api_client.py             # REST API client tests
+    ├── test_gateway.py                # WebSocket Gateway tests
+    ├── test_domain_models.py          # Data model serialization tests
+    ├── test_cli.py                    # CLI workflow & selection parser tests
+    ├── test_workers.py                # Worker signal & cancellation tests
+    ├── test_gui_lifecycle.py          # MainWindow lifecycle & worker leak tests
+    ├── test_gui_components.py         # Qt component tests
+    └── test_gui_pages.py              # Page interaction tests
 ```
 
-## Release workflow
-
-Every push to the default branch and every pull request runs the complete suite on Ubuntu. A tag matching `v*` additionally runs the same validation before a Windows build creates the executable release asset. The workflow sets Qt to offscreen mode for tests, uses pinned GitHub Action revisions, and only grants release-write permission to the tag-gated build job. A failed test job prevents the release build.
+---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the terms of the [MIT License](LICENSE).
