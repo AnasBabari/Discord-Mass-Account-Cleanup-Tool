@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Any
+
 import requests
 
 from discord_cleanup.api.exceptions import (

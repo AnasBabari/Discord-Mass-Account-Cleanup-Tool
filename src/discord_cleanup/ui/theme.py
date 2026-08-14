@@ -38,6 +38,6 @@ def get_qss_path() -> str:
 def load_stylesheet() -> str:
     path = get_qss_path()
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return f.read()
     return ""

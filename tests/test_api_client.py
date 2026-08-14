@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock
+
 import pytest
 
 from discord_cleanup.api.client import DiscordApiClient, get_clean_error

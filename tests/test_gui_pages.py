@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLineEdit
 

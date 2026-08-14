@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 from typing import Any
+
 import websocket
 
 from discord_cleanup.api.exceptions import RequestCancelledError

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 from typing import Any
+
 import qtawesome as qta
 from PyQt5.QtCore import QObject, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QCursor, QFont, QPainter, QPixmap

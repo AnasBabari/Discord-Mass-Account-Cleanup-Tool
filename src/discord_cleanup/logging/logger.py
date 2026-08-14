@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from discord_cleanup.security.token_sanitizer import sanitize_token
 

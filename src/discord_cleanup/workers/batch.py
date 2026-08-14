@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+
 from PyQt5.QtCore import pyqtSignal
 
 from discord_cleanup.api.client import DEFAULT_API_CLIENT, DiscordApiClient

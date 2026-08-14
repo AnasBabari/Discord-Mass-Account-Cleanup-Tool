@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+
 import qtawesome as qta
 from PyQt5.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer
 from PyQt5.QtGui import QColor, QCursor

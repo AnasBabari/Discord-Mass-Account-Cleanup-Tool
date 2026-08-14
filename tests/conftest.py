@@ -6,8 +6,8 @@ import sys
 # Ensure QT_QPA_PLATFORM is offscreen for headless CI/CD execution
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtWidgets import QApplication  # noqa: E402
 import pytest  # noqa: E402
+from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from discord_cleanup.api.rate_limiter import RequestCoordinator  # noqa: E402
 from discord_cleanup.models.domain import Guild, Relationship, RelationshipType, User  # noqa: E402

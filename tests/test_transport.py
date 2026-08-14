@@ -1,5 +1,6 @@
 import threading
 from unittest.mock import MagicMock
+
 import pytest
 from requests.exceptions import ConnectionError, ReadTimeout
 

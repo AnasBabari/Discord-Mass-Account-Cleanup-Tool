@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from unittest.mock import patch
+
 import pytest
 
 from discord_cleanup.logging.logger import TokenRedactingFilter, TokenRedactingFormatter

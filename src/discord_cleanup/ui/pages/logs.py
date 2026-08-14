@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
 import html
+from datetime import datetime
+
 import qtawesome as qta
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QCursor

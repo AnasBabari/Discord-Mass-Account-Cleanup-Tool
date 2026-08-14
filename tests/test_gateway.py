@@ -1,5 +1,6 @@
 import threading
 from unittest.mock import patch
+
 import pytest
 
 from discord_cleanup.api.exceptions import RequestCancelledError

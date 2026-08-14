@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Any, Protocol
+
 import requests
 from requests.exceptions import RequestException, Timeout
 

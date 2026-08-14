@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+
 from PyQt5.QtGui import QCloseEvent
 
 from discord_cleanup.ui.app import MainWindow, StreamInterceptor
