@@ -15,7 +15,7 @@ Designed with a strict multi-layered architecture, coordinated rate-limiting bac
 - **Adversarial Credential Security**: Multi-pattern token sanitization regex engine scrubs user tokens, MFA secrets, and Authorization headers across CLI prompts, stream interceptors, crash logs, and exported diagnostic files. Tokens are stored encrypted via the OS Keyring (`keyring`) and scrubbed from worker memory immediately upon task completion.
 - **Fail-Safe Destructive Action Workflows**: Two-step verification workflows require explicit user selection, summary previews (displaying target counts and names), and confirmation dialogs before executing irreversible actions (such as leaving servers or deleting friendships).
 - **Clean Transport Abstraction**: Fully modular HTTP transport layer built on standard protocols without browser fingerprinting, evasion tricks, or brittle global mocking hooks.
-- **Comprehensive Offline Test Suite**: 95+ unit and component tests achieving ~80% statement coverage across domain models, rate limiting, network transports, worker lifecycle states, and PyQt UI pages using mocked fixtures with zero live Discord API calls.
+- **Comprehensive Offline Test Suite**: 100+ unit and component tests achieving ~79% statement coverage across domain models, rate limiting, network transports, worker lifecycle states, and PyQt UI pages using mocked fixtures with zero live Discord API calls.
 - **Automated CI/CD Pipeline**: GitHub Actions workflow running automated lint checks (`Ruff`), static type checking (`Mypy`), cross-platform matrix testing on Ubuntu & Windows, and automated Windows executable releases with SHA256 checksums.
 
 ---

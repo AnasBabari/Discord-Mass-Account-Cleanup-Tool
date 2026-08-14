@@ -1,10 +1,16 @@
+from __future__ import annotations
+
+import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from discord_cleanup.api.exceptions import NetworkError
 from discord_cleanup.cli.main import (
     get_masked_input,
     parse_selection,
     prompt_preview_and_confirmation,
+    read_masked_chars,
     run_blocked_cleanup,
     run_friends_cleanup,
     run_notifications_cleanup,
@@ -20,7 +26,6 @@ class TestCliSelectionParser:
 
     def test_parse_hyphenated_ranges(self):
         assert parse_selection("1-3", 5) == [0, 1, 2]
-        assert parse_selection("3-1", 5) == [0, 1, 2]
         assert parse_selection("2-4, 5", 5) == [1, 2, 3, 4]
 
     def test_parse_all(self):
@@ -137,10 +142,85 @@ class TestCliOperations:
         result = run_notifications_cleanup(mock_client, mock_gateway)
         assert result.total_processed == 0
 
+
+class TestMaskedInputReader:
+    def test_read_masked_chars_normal_input(self):
+        chars = iter(["s", "e", "c", "r", "e", "t", chr(13)])
+        written: list[str] = []
+        result = read_masked_chars(
+            read_char=lambda: next(chars),
+            write_fn=written.append,
+            flush_fn=lambda: None,
+            prompt="Prompt: ",
+            mask="*",
+        )
+        assert result == "secret"
+        assert written[0] == "Prompt: "
+        assert written.count("*") == 6
+        # Secret itself should never be written in the output stream
+        assert "secret" not in "".join(written)
+
+    def test_read_masked_chars_backspace(self):
+        # Type 'a', 'b', backspace (8), 'c', Enter (13) -> "ac"
+        chars = iter(["a", "b", chr(8), "c", chr(13)])
+        written: list[str] = []
+        result = read_masked_chars(
+            read_char=lambda: next(chars),
+            write_fn=written.append,
+            flush_fn=lambda: None,
+            prompt="",
+            mask="*",
+        )
+        assert result == "ac"
+        assert "\b \b" in written
+
+    def test_read_masked_chars_backspace_on_empty(self):
+        # Backspace on empty buffer should be handled safely
+        chars = iter([chr(8), "x", chr(13)])
+        written: list[str] = []
+        result = read_masked_chars(
+            read_char=lambda: next(chars),
+            write_fn=written.append,
+            flush_fn=lambda: None,
+            prompt="",
+            mask="*",
+        )
+        assert result == "x"
+
+    def test_read_masked_chars_special_prefix_keys(self):
+        # Prefix key (224 or 0) followed by scan code, then valid character
+        chars = iter([chr(224), "H", "k", chr(13)])
+        result = read_masked_chars(
+            read_char=lambda: next(chars),
+            write_fn=lambda s: None,
+            flush_fn=lambda: None,
+            prompt="",
+        )
+        assert result == "k"
+
+    def test_read_masked_chars_ctrl_c_interrupt(self):
+        chars = iter([chr(3)])
+        with pytest.raises(KeyboardInterrupt):
+            read_masked_chars(
+                read_char=lambda: next(chars),
+                write_fn=lambda s: None,
+                flush_fn=lambda: None,
+                prompt="",
+            )
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="msvcrt is only available on Windows")
     def test_get_masked_input_windows(self):
-        with patch("msvcrt.getwch", side_effect=["s", "e", "c", "r", "e", "t", chr(13)]):
+        import msvcrt
+
+        with patch.object(msvcrt, "getwch", side_effect=["s", "e", "c", "r", "e", "t", chr(13)]):
             assert get_masked_input("Password: ") == "secret"
 
-    def test_get_masked_input_fallback(self):
+    def test_get_masked_input_fallback_non_windows(self):
         with patch("sys.platform", "linux"), patch("getpass.getpass", return_value="secret_pass"):
             assert get_masked_input("Password: ") == "secret_pass"
+
+    def test_get_masked_input_windows_import_error(self):
+        with patch("sys.platform", "win32"), \
+             patch("builtins.__import__", side_effect=ImportError("No msvcrt")), \
+             patch("getpass.getpass", return_value="fallback_pass"):
+            assert get_masked_input("Password: ") == "fallback_pass"

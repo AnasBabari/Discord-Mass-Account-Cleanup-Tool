@@ -57,7 +57,7 @@ discord-cleanup-gui = "discord_cleanup.ui.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-discord_cleanup = ["ui/theme.qss", "ui/assets/*.png"]
+discord_cleanup = ["ui/theme.qss", "ui/assets/*.png", "ui/assets/*.svg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

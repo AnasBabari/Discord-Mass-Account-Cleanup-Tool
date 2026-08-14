@@ -1,9 +1,9 @@
-from __future__ import annotations
-
 import getpass
 import logging
 import sys
 import time
+from collections.abc import Callable
+from typing import Any
 
 from discord_cleanup.api.client import DEFAULT_API_CLIENT, DiscordApiClient
 from discord_cleanup.api.exceptions import AuthenticationError, DiscordCleanupError
@@ -23,39 +23,74 @@ def parse_selection(user_input: str, total_items: int) -> list[int]:
         "all"       -> [0, 1, ..., total_items - 1]
     """
     cleaned = user_input.strip().lower()
-    if not cleaned or total_items <= 0:
+    if not cleaned:
         return []
+
     if cleaned == "all":
         return list(range(total_items))
 
     selected: set[int] = set()
-    parts = cleaned.replace(" ", ",").split(",")
+    # Normalize commas, semicolons, and spaces into delimiters
+    tokens = [tok.strip() for tok in cleaned.replace(";", ",").replace(" ", ",").split(",") if tok.strip()]
 
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            bounds = part.split("-", 1)
-            try:
-                start = int(bounds[0])
-                end = int(bounds[1])
-            except ValueError:
-                continue
-            if start > end:
-                start, end = end, start
-            for idx in range(start, end + 1):
-                if 1 <= idx <= total_items:
-                    selected.add(idx - 1)
+    for token in tokens:
+        if "-" in token:
+            parts = token.split("-")
+            if len(parts) == 2:
+                try:
+                    start = int(parts[0]) - 1
+                    end = int(parts[1]) - 1
+                    if start <= end and start >= 0 and end < total_items:
+                        selected.update(range(start, end + 1))
+                except ValueError:
+                    continue
         else:
             try:
-                idx = int(part)
-                if 1 <= idx <= total_items:
-                    selected.add(idx - 1)
+                idx = int(token) - 1
+                if 0 <= idx < total_items:
+                    selected.add(idx)
             except ValueError:
                 continue
 
     return sorted(selected)
+
+
+def read_masked_chars(
+    read_char: Callable[[], str],
+    write_fn: Callable[[str], Any] = sys.stdout.write,
+    flush_fn: Callable[[], Any] = sys.stdout.flush,
+    prompt: str = "Paste token: ",
+    mask: str = "*",
+) -> str:
+    """Read characters key-by-key with masking, supporting Backspace, Ctrl+C, and Enter."""
+    write_fn(prompt)
+    flush_fn()
+    entered: list[str] = []
+    while True:
+        char = read_char()
+        key = ord(char)
+        if key in (0, 224):  # Special key prefix (e.g. arrow keys)
+            try:
+                read_char()
+            except Exception:
+                pass
+            continue
+        if key == 13:  # Enter
+            write_fn("\n")
+            return "".join(entered)
+        if key == 3:  # Ctrl+C
+            raise KeyboardInterrupt()
+        if key in (8, 127):  # Backspace
+            if entered:
+                write_fn("\b \b")
+                flush_fn()
+                entered.pop()
+        elif 0 <= key <= 31:  # Control characters
+            pass
+        else:
+            write_fn(mask)
+            flush_fn()
+            entered.append(char)
 
 
 def get_masked_input(prompt: str = "Paste token: ", mask: str = "*") -> str:
@@ -63,34 +98,12 @@ def get_masked_input(prompt: str = "Paste token: ", mask: str = "*") -> str:
     if sys.platform == "win32":
         try:
             import msvcrt
-            sys.stdout.write(prompt)
-            sys.stdout.flush()
-            entered: list[str] = []
-            while True:
-                char = msvcrt.getwch()
-                key = ord(char)
-                if key in (0, 224):
-                    try:
-                        msvcrt.getwch()
-                    except Exception:
-                        pass
-                    continue
-                if key == 13:  # Enter
-                    sys.stdout.write("\n")
-                    return "".join(entered)
-                if key == 3:  # Ctrl+C
-                    raise KeyboardInterrupt()
-                if key in (8, 127):  # Backspace
-                    if entered:
-                        sys.stdout.write("\b \b")
-                        sys.stdout.flush()
-                        entered.pop()
-                elif 0 <= key <= 31:
-                    pass
-                else:
-                    sys.stdout.write(mask)
-                    sys.stdout.flush()
-                    entered.append(char)
+
+            return read_masked_chars(
+                read_char=msvcrt.getwch,
+                prompt=prompt,
+                mask=mask,
+            )
         except ImportError:
             return getpass.getpass(prompt)
     else:
