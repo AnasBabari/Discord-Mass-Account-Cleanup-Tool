@@ -32,17 +32,31 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
 
       - name: Install Linux Qt dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 libgl1 xvfb
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-xinerama0 \
+            libxcb-xfixes0 \
+            libxcb-shape0 \
+            xvfb
 
-      - name: Install package and dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -e ".[dev]"
+          python -m pip install -r requirements.txt
+          python -m pip install -e .
 
       - name: Lint check (Ruff)
         run: |
@@ -52,9 +66,19 @@ jobs:
         run: |
           python -m mypy
 
-      - name: Run test suite
+      - name: Run test suite (Linux)
+        if: runner.os == 'Linux'
         env:
           QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: src
+        run: |
+          xvfb-run -a python -m pytest tests/ -v --cov=src/discord_cleanup --cov-report=term-missing
+
+      - name: Run test suite (Windows)
+        if: runner.os == 'Windows'
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONPATH: src
         run: |
           python -m pytest tests/ -v --cov=src/discord_cleanup --cov-report=term-missing
 
@@ -73,11 +97,13 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -e ".[dev]"
+          python -m pip install -r requirements.txt
+          python -m pip install -e .
 
       - name: Build standalone executable
         run: |
