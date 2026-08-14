@@ -1,15 +1,22 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QStackedWidget, QLabel, QShortcut, QFrame
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget,
+    QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton,
+    QProgressBar, QMessageBox, QStackedWidget, QLabel, QShortcut
+)
 from PyQt5.QtGui import QCursor, QColor, QBrush, QKeySequence
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
-from ui.theme import *
+from ui.theme import (
+    ACCENT, SUCCESS, TEXT_DIM, TEXT_PRIMARY, WARNING
+)
 from ui.components import SectionHeader, StatBadge, StatCard, LoadingOverlay, get_length_str
 from workers import FetchServersWorker, LeaveServersWorker
+
 
 class ServersPage(QWidget):
     log_msg_signal = pyqtSignal(str, str)
     action_finished = pyqtSignal()
-    
+
     def __init__(self, parent=None, worker_tracker=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -19,11 +26,11 @@ class ServersPage(QWidget):
         self.worker_tracker = worker_tracker or (lambda worker: worker)
         self.servers_worker = None
         self.leave_worker = None
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 24, 32, 32)
         layout.setSpacing(14)
-        
+
         header = SectionHeader('fa5s.server', 'Servers Management')
         layout.addWidget(header)
 
@@ -39,7 +46,7 @@ class ServersPage(QWidget):
         stats_bar.addWidget(self.stat_leavable)
         stats_bar.addWidget(self.stat_owned)
         layout.addLayout(stats_bar)
-        
+
         # ── Search Bar & Filter ─────────────────────────────────────────────
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
@@ -50,12 +57,12 @@ class ServersPage(QWidget):
         self.servers_search.addAction(qta.icon('fa5s.search', color=TEXT_DIM), QLineEdit.LeadingPosition)
         self.servers_search.textChanged.connect(self.filter_servers)
         top_bar.addWidget(self.servers_search)
-        
+
         self.servers_status = StatBadge()
         self.servers_status.setText("Selected: 0 / 0")
         top_bar.addWidget(self.servers_status)
         layout.addLayout(top_bar)
-        
+
         # ── Servers Table ───────────────────────────────────────────────────
         self.servers_table = QTableWidget(0, 4)
         self.servers_table.setHorizontalHeaderLabels(["", "Server Name", "ID", "Server Created"])
@@ -71,7 +78,7 @@ class ServersPage(QWidget):
         self.servers_table.verticalHeader().setVisible(False)
         self.servers_table.verticalHeader().setDefaultSectionSize(48)
         self.servers_table.cellClicked.connect(self.servers_table_clicked)
-        
+
         # Empty state for "no servers"
         self.empty_state = QWidget()
         empty_layout = QVBoxLayout(self.empty_state)
@@ -85,21 +92,21 @@ class ServersPage(QWidget):
         # Loading overlay splash
         self.loading_overlay = LoadingOverlay()
         self.loading_overlay.set_status("Fetching servers...")
-        
+
         self.table_stack = QStackedWidget()
         self.table_stack.addWidget(self.servers_table)   # index 0
         self.table_stack.addWidget(self.empty_state)     # index 1
         self.table_stack.addWidget(self.loading_overlay)  # index 2
         layout.addWidget(self.table_stack)
-        
+
         QShortcut(QKeySequence("Ctrl+A"), self.servers_table, self.select_all_servers)
         QShortcut(QKeySequence("Delete"), self.servers_table, self.leave_selected_servers)
         QShortcut(QKeySequence("Ctrl+F"), self, lambda: self.servers_search.setFocus())
-        
+
         self.servers_progress = QProgressBar()
         self.servers_progress.hide()
         layout.addWidget(self.servers_progress)
-        
+
         # ── Controls Footer ─────────────────────────────────────────────────
         controls = QHBoxLayout()
         controls.setSpacing(12)
@@ -111,9 +118,9 @@ class ServersPage(QWidget):
         self.sel_all_servers_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.sel_all_servers_btn.clicked.connect(self.select_all_servers)
         controls.addWidget(self.sel_all_servers_btn)
-        
+
         controls.addStretch()
-        
+
         self.leave_servers_btn = QPushButton("  Leave Selected")
         self.leave_servers_btn.setObjectName("DangerBtn")
         self.leave_servers_btn.setIcon(qta.icon('fa5s.sign-out-alt', color="#ffffff"))
@@ -121,7 +128,7 @@ class ServersPage(QWidget):
         self.leave_servers_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.leave_servers_btn.clicked.connect(self.leave_selected_servers)
         controls.addWidget(self.leave_servers_btn)
-        
+
         layout.addLayout(controls)
 
     def set_token(self, token):
@@ -139,6 +146,8 @@ class ServersPage(QWidget):
         self.servers_worker.start()
 
     def on_servers_fetched(self, guilds, err):
+        if not self.token:
+            return
         if err:
             self.log_msg_signal.emit(f"ERR fetching servers: {err}", "error")
             self.empty_label.setText(f"Failed to load servers: {err}")
@@ -166,12 +175,12 @@ class ServersPage(QWidget):
         for g in self.servers_data:
             row = self.servers_table.rowCount()
             self.servers_table.insertRow(row)
-            
+
             cb = QTableWidgetItem()
             cb.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             cb.setCheckState(Qt.Unchecked)
             self.servers_table.setItem(row, 0, cb)
-            
+
             name_item = QTableWidgetItem(g.get('name', 'Unknown'))
             name_item.setForeground(QBrush(QColor(TEXT_PRIMARY)))
             name_item.setIcon(qta.icon('fa5b.discord', color=ACCENT))
@@ -185,7 +194,7 @@ class ServersPage(QWidget):
             member_since_item.setForeground(QBrush(QColor(TEXT_DIM)))
             member_since_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             self.servers_table.setItem(row, 3, member_since_item)
-            
+
         self.servers_table.setSortingEnabled(True)
         self.update_status()
 
@@ -207,7 +216,10 @@ class ServersPage(QWidget):
         self.update_status()
 
     def update_status(self):
-        selected = sum(1 for i in range(self.servers_table.rowCount()) if self.servers_table.item(i, 0).checkState() == Qt.Checked)
+        selected = sum(
+            1 for i in range(self.servers_table.rowCount())
+            if self.servers_table.item(i, 0).checkState() == Qt.Checked
+        )
         total = self.servers_table.rowCount()
         self.servers_status.setText(f"Selected: {selected} / {total}")
         if selected > 0:
@@ -222,7 +234,7 @@ class ServersPage(QWidget):
         target_state = Qt.Checked
         if all(self.servers_table.item(i, 0).checkState() == Qt.Checked for i in visible_rows):
             target_state = Qt.Unchecked
-            
+
         for i in visible_rows:
             self.servers_table.item(i, 0).setCheckState(target_state)
         self.update_status()
@@ -234,19 +246,25 @@ class ServersPage(QWidget):
                 name = self.servers_table.item(i, 1).text()
                 s_id = self.servers_table.item(i, 2).text()
                 to_leave.append({"name": name, "id": s_id})
-                
+
         if not to_leave:
             self.log_msg_signal.emit("No servers selected.", "warning")
             return
-            
-        reply = QMessageBox.question(self, "Confirm Action", f"Are you sure you want to leave {len(to_leave)} servers?\nThis cannot be undone.", QMessageBox.Yes | QMessageBox.No)
-        if reply == QMessageBox.No: return
-        
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Action",
+            f"Are you sure you want to leave {len(to_leave)} servers?\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.No:
+            return
+
         self.leave_servers_btn.setEnabled(False)
         self.servers_progress.setMaximum(len(to_leave))
         self.servers_progress.setValue(0)
         self.servers_progress.show()
-        
+
         self.leave_worker = self.worker_tracker(LeaveServersWorker(self.token, to_leave))
         self.leave_worker.finished.connect(self.leave_worker.deleteLater)
         self.leave_worker.finished.connect(lambda: setattr(self, "leave_worker", None))
@@ -264,7 +282,7 @@ class ServersPage(QWidget):
         self.leave_servers_btn.setEnabled(True)
         self.action_finished.emit()
         self.fetch_data()
-        
+
     def clear(self):
         for worker in (self.servers_worker, self.leave_worker):
             if worker is not None and hasattr(worker, "cancel"):

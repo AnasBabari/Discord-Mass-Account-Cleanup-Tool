@@ -3,14 +3,14 @@ import os
 import time
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QPixmap, QIcon
 import qtawesome as qta
 from gui_app import MainWindow
-from ui.theme import ACCENT, BG_DARKEST
+from ui.theme import BG_DARKEST
+
 
 def generate_screenshots():
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
-    
+
     app = QApplication.instance() or QApplication(sys.argv)
     win = MainWindow()
     win.resize(1100, 750)
@@ -24,7 +24,7 @@ def generate_screenshots():
     win.set_authenticated(True)
     win.account_name = "DemoUser"
     win.account_name_label.setText("DemoUser")
-    
+
     # Set avatar
     avatar_pix = qta.icon('fa5s.user', color=BG_DARKEST).pixmap(QSize(24, 24))
     win.account_avatar.setPixmap(avatar_pix)
@@ -62,12 +62,36 @@ def generate_screenshots():
     # ── 2. Friends Page Screenshot ──────────────────────────────────────────
     win.switch_page("friends")
     win.friends_page.friends_data = [
-        {"id": "192837465019283746", "user": {"global_name": "Sarah Connor", "username": "sarah_c"}, "since": "2022-04-15T14:20:00Z"},
-        {"id": "283746501928374650", "user": {"global_name": "Neo Anderson", "username": "the_one"}, "since": "2021-11-03T09:12:00Z"},
-        {"id": "374650192837465019", "user": {"global_name": "Gordon Freeman", "username": "gfreeman"}, "since": "2023-01-20T18:45:00Z"},
-        {"id": "465019283746501928", "user": {"global_name": "Ellen Ripley", "username": "ripley_lv426"}, "since": "2020-08-10T12:00:00Z"},
-        {"id": "556019283746501928", "user": {"global_name": "Arthur Dent", "username": "adent42"}, "since": "2023-06-25T16:30:00Z"},
-        {"id": "647019283746501928", "user": {"global_name": "Ada Lovelace", "username": "adalove"}, "since": "2019-12-01T10:00:00Z"},
+        {
+            "id": "192837465019283746",
+            "user": {"global_name": "Sarah Connor", "username": "sarah_c"},
+            "since": "2022-04-15T14:20:00Z"
+        },
+        {
+            "id": "283746501928374650",
+            "user": {"global_name": "Neo Anderson", "username": "the_one"},
+            "since": "2021-11-03T09:12:00Z"
+        },
+        {
+            "id": "374650192837465019",
+            "user": {"global_name": "Gordon Freeman", "username": "gfreeman"},
+            "since": "2023-01-20T18:45:00Z"
+        },
+        {
+            "id": "465019283746501928",
+            "user": {"global_name": "Ellen Ripley", "username": "ripley_lv426"},
+            "since": "2020-08-10T12:00:00Z"
+        },
+        {
+            "id": "556019283746501928",
+            "user": {"global_name": "Arthur Dent", "username": "adent42"},
+            "since": "2023-06-25T16:30:00Z"
+        },
+        {
+            "id": "647019283746501928",
+            "user": {"global_name": "Ada Lovelace", "username": "adalove"},
+            "since": "2019-12-01T10:00:00Z"
+        },
     ]
     win.friends_page.stat_total.set_value("6")
     win.friends_page.populate_table()
@@ -89,7 +113,10 @@ def generate_screenshots():
         {"id": "112233445566778899", "user": {"global_name": "Crypto Spammer 3000", "username": "free_crypto_now"}},
         {"id": "223344556677889900", "user": {"global_name": "Nitro Giveaway Bot", "username": "nitro_bot_claim"}},
         {"id": "334455667788990011", "user": {"global_name": "Steam Gift Card DM", "username": "steam_giftcards_dm"}},
-        {"id": "445566778899001122", "user": {"global_name": "Phishing Bot Support", "username": "discord_mod_support"}},
+        {
+            "id": "445566778899001122",
+            "user": {"global_name": "Phishing Bot Support", "username": "discord_mod_support"}
+        },
     ]
     win.blocked_page.stat_total.set_value("4")
     win.blocked_page.populate_table()
@@ -117,6 +144,7 @@ def generate_screenshots():
 
     win.close()
     print("All screenshots generated successfully!")
+
 
 if __name__ == "__main__":
     generate_screenshots()

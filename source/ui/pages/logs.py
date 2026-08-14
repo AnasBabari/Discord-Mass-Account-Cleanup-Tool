@@ -1,11 +1,13 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QFileDialog, QButtonGroup, QFrame
+import html
+import time
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QFileDialog, QButtonGroup
 from PyQt5.QtGui import QCursor
 from PyQt5.QtCore import Qt, QSize
 import qtawesome as qta
-import time
 import discord_mass_cleanup as dmc
-from ui.theme import *
+from ui.theme import ACCENT, DANGER, SUCCESS, TEXT_DIM, TEXT_PRIMARY, WARNING
 from ui.components import SectionHeader
+
 
 class LogsPage(QWidget):
     def __init__(self, parent=None):
@@ -13,17 +15,17 @@ class LogsPage(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.raw_logs = []  # list of tuples (timestamp, message, msg_type)
         self.active_filter = "all"
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 24, 32, 32)
         layout.setSpacing(14)
-        
+
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
 
         header = SectionHeader('fa5s.terminal', 'Terminal & System Logs')
         top_bar.addWidget(header)
-        
+
         top_bar.addStretch()
 
         self.export_btn = QPushButton("  Export Log")
@@ -33,7 +35,7 @@ class LogsPage(QWidget):
         self.export_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.export_btn.clicked.connect(self.export_log)
         top_bar.addWidget(self.export_btn)
-        
+
         clear_btn = QPushButton("  Clear")
         clear_btn.setObjectName("GhostBtn")
         clear_btn.setIcon(qta.icon('fa5s.trash-alt', color=ACCENT))
@@ -41,9 +43,9 @@ class LogsPage(QWidget):
         clear_btn.setCursor(QCursor(Qt.PointingHandCursor))
         clear_btn.clicked.connect(self.clear)
         top_bar.addWidget(clear_btn)
-        
+
         layout.addLayout(top_bar)
-        
+
         # ── Filter Bar ──────────────────────────────────────────────────────
         filter_bar = QHBoxLayout()
         filter_bar.setSpacing(8)
@@ -70,13 +72,13 @@ class LogsPage(QWidget):
 
         filter_bar.addStretch()
         layout.addLayout(filter_bar)
-        
+
         self.log_textbox = QTextEdit()
         self.log_textbox.setReadOnly(True)
         self.log_textbox.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.log_textbox.document().setMaximumBlockCount(2000)
         layout.addWidget(self.log_textbox)
-        
+
         self.log_msg("Terminal initialized.", "debug")
 
     def set_log_filter(self, filter_key):
@@ -86,9 +88,9 @@ class LogsPage(QWidget):
     def rebuild_log_view(self):
         self.log_textbox.clear()
         colors = {
-            "info":    ACCENT,
-            "error":   DANGER,
-            "debug":   TEXT_DIM,
+            "info": ACCENT,
+            "error": DANGER,
+            "debug": TEXT_DIM,
             "success": SUCCESS,
             "warning": WARNING,
         }
@@ -96,14 +98,18 @@ class LogsPage(QWidget):
             if self.active_filter != "all" and msg_type != self.active_filter:
                 continue
             color = colors.get(msg_type, ACCENT)
-            html = f"<span style='color: {TEXT_DIM};'>{timestamp}</span> <span style='color: {color};'>{message}</span>"
-            self.log_textbox.append(html)
+            safe_msg = html.escape(str(message))
+            html_chunk = (
+                f"<span style='color: {TEXT_DIM};'>{timestamp}</span> "
+                f"<span style='color: {color};'>{safe_msg}</span>"
+            )
+            self.log_textbox.append(html_chunk)
 
     def log_msg(self, message, msg_type="info"):
         colors = {
-            "info":    ACCENT,
-            "error":   DANGER,
-            "debug":   TEXT_DIM,
+            "info": ACCENT,
+            "error": DANGER,
+            "debug": TEXT_DIM,
             "success": SUCCESS,
             "warning": WARNING,
         }
@@ -111,8 +117,12 @@ class LogsPage(QWidget):
         timestamp = time.strftime("[%Y-%m-%d %H:%M:%S]")
         self.raw_logs.append((timestamp, message, msg_type))
         if self.active_filter == "all" or self.active_filter == msg_type:
-            html = f"<span style='color: {TEXT_DIM};'>{timestamp}</span> <span style='color: {color};'>{message}</span>"
-            self.log_textbox.append(html)
+            safe_msg = html.escape(str(message))
+            html_chunk = (
+                f"<span style='color: {TEXT_DIM};'>{timestamp}</span> "
+                f"<span style='color: {color};'>{safe_msg}</span>"
+            )
+            self.log_textbox.append(html_chunk)
 
     def clear(self):
         self.raw_logs.clear()

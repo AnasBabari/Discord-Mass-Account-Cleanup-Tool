@@ -1,15 +1,22 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton, QProgressBar, QMessageBox, QMenu, QStackedWidget, QLabel, QShortcut
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget,
+    QTableWidgetItem, QHeaderView, QAbstractItemView, QPushButton,
+    QProgressBar, QMessageBox, QMenu, QStackedWidget, QLabel, QShortcut
+)
 from PyQt5.QtGui import QCursor, QColor, QBrush, QKeySequence
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
-from ui.theme import *
+from ui.theme import (
+    ACCENT, DANGER, SUCCESS, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY
+)
 from ui.components import SectionHeader, StatBadge, StatCard, LoadingOverlay, get_length_str
 from workers import FetchFriendsWorker, RemoveFriendsWorker, BlockUsersWorker
+
 
 class FriendsPage(QWidget):
     log_msg_signal = pyqtSignal(str, str)
     action_finished = pyqtSignal()
-    
+
     def __init__(self, parent=None, worker_tracker=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -19,25 +26,25 @@ class FriendsPage(QWidget):
         self.friends_worker = None
         self.remove_worker = None
         self.block_worker = None
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 24, 32, 32)
         layout.setSpacing(14)
-        
-        header = SectionHeader('mdi.account-multiple', 'Friends Management')
+
+        header = SectionHeader('fa5s.user-friends', 'Friends Management')
         layout.addWidget(header)
 
         # ── KPI Stat Cards Bar ──────────────────────────────────────────────
         stats_bar = QHBoxLayout()
         stats_bar.setSpacing(12)
 
-        self.stat_total = StatCard("Total Friends", "0", "mdi.account-multiple", ACCENT)
+        self.stat_total = StatCard("Total Friends", "0", "fa5s.user-friends", ACCENT)
         self.stat_selected = StatCard("Selected", "0", "fa5s.check-circle", SUCCESS)
 
         stats_bar.addWidget(self.stat_total)
         stats_bar.addWidget(self.stat_selected)
         layout.addLayout(stats_bar)
-        
+
         # ── Search Bar & Filter ─────────────────────────────────────────────
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
@@ -48,12 +55,12 @@ class FriendsPage(QWidget):
         self.friends_search.addAction(qta.icon('fa5s.search', color=TEXT_DIM), QLineEdit.LeadingPosition)
         self.friends_search.textChanged.connect(self.filter_friends)
         top_bar.addWidget(self.friends_search)
-        
+
         self.friends_status = StatBadge()
         self.friends_status.setText("Selected: 0 / 0")
         top_bar.addWidget(self.friends_status)
         layout.addLayout(top_bar)
-        
+
         # ── Friends Table ───────────────────────────────────────────────────
         self.friends_table = QTableWidget(0, 5)
         self.friends_table.setHorizontalHeaderLabels(["", "Display Name", "Username", "ID", "Friends Since"])
@@ -72,7 +79,7 @@ class FriendsPage(QWidget):
         self.friends_table.cellClicked.connect(self.friends_table_clicked)
         self.friends_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.friends_table.customContextMenuRequested.connect(self.friends_context_menu)
-        
+
         # Empty state
         self.empty_state = QWidget()
         empty_layout = QVBoxLayout(self.empty_state)
@@ -86,21 +93,21 @@ class FriendsPage(QWidget):
         # Loading overlay splash
         self.loading_overlay = LoadingOverlay()
         self.loading_overlay.set_status("Fetching friends...")
-        
+
         self.table_stack = QStackedWidget()
         self.table_stack.addWidget(self.friends_table)    # index 0
         self.table_stack.addWidget(self.empty_state)      # index 1
         self.table_stack.addWidget(self.loading_overlay)   # index 2
         layout.addWidget(self.table_stack)
-        
+
         QShortcut(QKeySequence("Ctrl+A"), self.friends_table, self.select_all_friends)
         QShortcut(QKeySequence("Delete"), self.friends_table, self.remove_selected_friends)
         QShortcut(QKeySequence("Ctrl+F"), self, lambda: self.friends_search.setFocus())
-        
+
         self.friends_progress = QProgressBar()
         self.friends_progress.hide()
         layout.addWidget(self.friends_progress)
-        
+
         # ── Action Buttons Footer ───────────────────────────────────────────
         controls = QHBoxLayout()
         controls.setSpacing(12)
@@ -112,9 +119,9 @@ class FriendsPage(QWidget):
         self.sel_all_friends_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.sel_all_friends_btn.clicked.connect(self.select_all_friends)
         controls.addWidget(self.sel_all_friends_btn)
-        
+
         controls.addStretch()
-        
+
         self.block_friends_btn = QPushButton("  Block Selected")
         self.block_friends_btn.setObjectName("DangerBtn")
         self.block_friends_btn.setIcon(qta.icon('fa5s.ban', color="#ffffff"))
@@ -122,7 +129,7 @@ class FriendsPage(QWidget):
         self.block_friends_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.block_friends_btn.clicked.connect(self.block_selected_users)
         controls.addWidget(self.block_friends_btn)
-        
+
         self.remove_friends_btn = QPushButton("  Remove Selected")
         self.remove_friends_btn.setObjectName("DangerBtn")
         self.remove_friends_btn.setIcon(qta.icon('fa5s.user-times', color="#ffffff"))
@@ -130,7 +137,7 @@ class FriendsPage(QWidget):
         self.remove_friends_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.remove_friends_btn.clicked.connect(self.remove_selected_friends)
         controls.addWidget(self.remove_friends_btn)
-        
+
         layout.addLayout(controls)
 
     def set_token(self, token):
@@ -148,6 +155,8 @@ class FriendsPage(QWidget):
         self.friends_worker.start()
 
     def on_friends_fetched(self, friends, err):
+        if not self.token:
+            return
         if err:
             self.log_msg_signal.emit(f"ERR fetching friends: {err}", "error")
             self.empty_label.setText(f"Failed to load friends: {err}")
@@ -169,16 +178,16 @@ class FriendsPage(QWidget):
         for f in self.friends_data:
             row = self.friends_table.rowCount()
             self.friends_table.insertRow(row)
-            
+
             cb = QTableWidgetItem()
             cb.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             cb.setCheckState(Qt.Unchecked)
             self.friends_table.setItem(row, 0, cb)
-            
+
             user = f.get("user", {})
             name = user.get("global_name") or user.get("username", "Unknown")
             uname = "@" + user.get("username", "")
-            
+
             name_item = QTableWidgetItem(name)
             name_item.setForeground(QBrush(QColor(TEXT_PRIMARY)))
             name_item.setIcon(qta.icon('fa5s.user', color=ACCENT))
@@ -188,18 +197,19 @@ class FriendsPage(QWidget):
             uname_item.setForeground(QBrush(QColor(TEXT_SECONDARY)))
             self.friends_table.setItem(row, 2, uname_item)
 
-            self.friends_table.setItem(row, 3, QTableWidgetItem(f.get("id", "")))
+            self.friends_table.setItem(row, 3, QTableWidgetItem(f.get('id', '')))
 
             length = get_length_str(f.get("id"), f.get("since"))
             length_item = QTableWidgetItem(length)
             length_item.setToolTip(str(f.get("since", "Unknown Date")))
             length_item.setForeground(QBrush(QColor(TEXT_DIM)))
             self.friends_table.setItem(row, 4, length_item)
-            
+
         self.friends_table.setSortingEnabled(True)
         self.update_status()
 
     def filter_friends(self, text):
+        search_query = text.lower()
         for i in range(self.friends_table.rowCount()):
             name_item = self.friends_table.item(i, 1)
             uname_item = self.friends_table.item(i, 2)
@@ -209,7 +219,8 @@ class FriendsPage(QWidget):
             name = name_item.text().lower()
             uname = uname_item.text().lower()
             u_id = id_item.text().lower() if id_item else ""
-            self.friends_table.setRowHidden(i, text.lower() not in name and text.lower() not in uname and text.lower() not in u_id)
+            matches = search_query in name or search_query in uname or search_query in u_id
+            self.friends_table.setRowHidden(i, not matches)
         self.update_status()
 
     def friends_table_clicked(self, row, col):
@@ -219,7 +230,10 @@ class FriendsPage(QWidget):
         self.update_status()
 
     def update_status(self):
-        selected = sum(1 for i in range(self.friends_table.rowCount()) if self.friends_table.item(i, 0).checkState() == Qt.Checked)
+        selected = sum(
+            1 for i in range(self.friends_table.rowCount())
+            if self.friends_table.item(i, 0).checkState() == Qt.Checked
+        )
         total = self.friends_table.rowCount()
         self.friends_status.setText(f"Selected: {selected} / {total}")
         self.stat_selected.set_value(selected)
@@ -243,19 +257,20 @@ class FriendsPage(QWidget):
 
     def friends_context_menu(self, pos):
         item = self.friends_table.itemAt(pos)
-        if item is None: return
-        
+        if item is None:
+            return
+
         row = item.row()
         menu = QMenu(self)
-        
+
         remove_action = menu.addAction("  Remove Friend")
         remove_action.setIcon(qta.icon('fa5s.user-times', color=DANGER))
-        
+
         block_action = menu.addAction("  Block User")
         block_action.setIcon(qta.icon('fa5s.ban', color=DANGER))
-        
+
         action = menu.exec_(self.friends_table.viewport().mapToGlobal(pos))
-        
+
         if action == remove_action:
             self.friends_table.item(row, 0).setCheckState(Qt.Checked)
             self.remove_selected_friends()
@@ -271,19 +286,25 @@ class FriendsPage(QWidget):
                 username = self.friends_table.item(i, 2).text().lstrip("@")
                 f_id = self.friends_table.item(i, 3).text()
                 to_remove.append({"user": {"global_name": display_name, "username": username}, "id": f_id})
-                
+
         if not to_remove:
             self.log_msg_signal.emit("No friends selected.", "warning")
             return
-            
-        reply = QMessageBox.question(self, "Confirm Action", f"Are you sure you want to remove {len(to_remove)} friends?\nThis cannot be undone.", QMessageBox.Yes | QMessageBox.No)
-        if reply == QMessageBox.No: return
-        
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Action",
+            f"Are you sure you want to remove {len(to_remove)} friends?\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.No:
+            return
+
         self.remove_friends_btn.setEnabled(False)
         self.friends_progress.setMaximum(len(to_remove))
         self.friends_progress.setValue(0)
         self.friends_progress.show()
-        
+
         self.remove_worker = self.worker_tracker(RemoveFriendsWorker(self.token, to_remove))
         self.remove_worker.finished.connect(self.remove_worker.deleteLater)
         self.remove_worker.finished.connect(lambda: setattr(self, "remove_worker", None))
@@ -310,19 +331,25 @@ class FriendsPage(QWidget):
                 username = self.friends_table.item(i, 2).text().lstrip("@")
                 f_id = self.friends_table.item(i, 3).text()
                 to_block.append({"user": {"global_name": display_name, "username": username}, "id": f_id})
-                
+
         if not to_block:
             self.log_msg_signal.emit("No users selected to block.", "warning")
             return
-            
-        reply = QMessageBox.question(self, "Confirm Action", f"Are you sure you want to block {len(to_block)} users?", QMessageBox.Yes | QMessageBox.No)
-        if reply == QMessageBox.No: return
-        
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Action",
+            f"Are you sure you want to block {len(to_block)} users?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.No:
+            return
+
         self.block_friends_btn.setEnabled(False)
         self.friends_progress.setMaximum(len(to_block))
         self.friends_progress.setValue(0)
         self.friends_progress.show()
-        
+
         self.block_worker = self.worker_tracker(BlockUsersWorker(self.token, to_block))
         self.block_worker.finished.connect(self.block_worker.deleteLater)
         self.block_worker.finished.connect(lambda: setattr(self, "block_worker", None))
@@ -335,7 +362,7 @@ class FriendsPage(QWidget):
         self.block_friends_btn.setEnabled(True)
         self.action_finished.emit()
         self.fetch_data()
-        
+
     def clear(self):
         for worker in (self.friends_worker, self.remove_worker, self.block_worker):
             if worker is not None and hasattr(worker, "cancel"):

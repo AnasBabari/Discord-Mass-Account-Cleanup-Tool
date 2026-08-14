@@ -3,6 +3,7 @@ import threading
 from PyQt5.QtCore import QThread, pyqtSignal
 import discord_mass_cleanup as dmc
 
+
 class CancellableTokenWorker(QThread):
     """Base worker with cooperative cancellation and prompt token scrubbing."""
 
@@ -23,10 +24,13 @@ class CancellableTokenWorker(QThread):
 
 
 class LoginWorker(CancellableTokenWorker):
-    result_signal = pyqtSignal(bool, str, str, str, bytes, bool) # success, message, raw_username, token, avatar_bytes, save
+    # Signals: success, message, raw_username, token, avatar_bytes, save
+    result_signal = pyqtSignal(bool, str, str, str, bytes, bool)
+
     def __init__(self, token, save=True):
         super().__init__(token)
         self.save = save
+
     def run(self):
         token = self.token
         if not token or self.is_cancelled():
@@ -47,7 +51,7 @@ class LoginWorker(CancellableTokenWorker):
             username = user.get("username")
             user_id = user.get("id")
             avatar_hash = user.get("avatar")
-            
+
             avatar_bytes = b""
             if user_id:
                 if avatar_hash:
@@ -58,7 +62,7 @@ class LoginWorker(CancellableTokenWorker):
                     except Exception:
                         index = 0
                     avatar_url = f"https://cdn.discordapp.com/embed/avatars/{index}.png"
-                
+
                 try:
                     client = dmc.HTTP_TRANSPORT
                     if dmc.HAS_CURL_CFFI and client is dmc.curl_requests:
@@ -79,10 +83,13 @@ class LoginWorker(CancellableTokenWorker):
         finally:
             self.scrub_token()
 
+
 class FetchServersWorker(CancellableTokenWorker):
     result_signal = pyqtSignal(list, str)
+
     def __init__(self, token):
         super().__init__(token)
+
     def run(self):
         if not self.token or self.is_cancelled():
             self.result_signal.emit([], "No token provided")
@@ -98,8 +105,10 @@ class FetchServersWorker(CancellableTokenWorker):
 
 class FetchFriendsWorker(CancellableTokenWorker):
     result_signal = pyqtSignal(list, str)
+
     def __init__(self, token):
         super().__init__(token)
+
     def run(self):
         if not self.token or self.is_cancelled():
             self.result_signal.emit([], "No token provided")
@@ -115,8 +124,10 @@ class FetchFriendsWorker(CancellableTokenWorker):
 
 class FetchBlockedWorker(CancellableTokenWorker):
     result_signal = pyqtSignal(list, str)
+
     def __init__(self, token):
         super().__init__(token)
+
     def run(self):
         if not self.token or self.is_cancelled():
             self.result_signal.emit([], "No token provided")
@@ -132,8 +143,8 @@ class FetchBlockedWorker(CancellableTokenWorker):
 
 class BatchActionWorker(CancellableTokenWorker):
     """Unified runner for batch bulk mutation actions (friends, servers, blocks)."""
-    progress_signal = pyqtSignal(int, str) # current_count, log_msg
-    finished_signal = pyqtSignal(int, int) # success, failed
+    progress_signal = pyqtSignal(int, str)  # current_count, log_msg
+    finished_signal = pyqtSignal(int, int)  # success, failed
 
     def __init__(self, token, items, action_name="PROCESSED"):
         super().__init__(token)
@@ -165,6 +176,10 @@ class BatchActionWorker(CancellableTokenWorker):
                 if status == 204:
                     success += 1
                     self.progress_signal.emit(i + 1, f"[+] {self.action_name}: {display}")
+                elif status == 401:
+                    failed += 1
+                    self.progress_signal.emit(i + 1, f"[-] FAILED: {display} (401 Unauthorized - Invalid Token)")
+                    break
                 else:
                     failed += 1
                     self.progress_signal.emit(i + 1, f"[-] FAILED: {display} ({text})")
@@ -217,8 +232,9 @@ class LeaveServersWorker(BatchActionWorker):
 
 class ReadNotifsWorker(CancellableTokenWorker):
     progress_signal = pyqtSignal(str)
-    chunk_progress_signal = pyqtSignal(int, int) # current_chunk, total_chunks
+    chunk_progress_signal = pyqtSignal(int, int)  # current_chunk, total_chunks
     finished_signal = pyqtSignal(int, int, str)
+
     def __init__(self, token):
         super().__init__(token)
 
@@ -228,14 +244,16 @@ class ReadNotifsWorker(CancellableTokenWorker):
             if not grouped_channels:
                 self.finished_signal.emit(0, 0, "No unread channels found.")
                 return
-            
+
             total_unread = sum(len(c) for c in grouped_channels.values())
             if total_unread == 0:
                 self.finished_signal.emit(0, 0, "")
                 return
-                
-            self.progress_signal.emit(f"[*] Found {total_unread} unread channels across {len(grouped_channels)} servers/DMs.")
-            
+
+            self.progress_signal.emit(
+                f"[*] Found {total_unread} unread channels across {len(grouped_channels)} servers/DMs."
+            )
+
             current_time_ms = int(time.time() * 1000)
             future_ms = current_time_ms + 3600000
             massive_message_id = str((future_ms - 1420070400000) << 22)
@@ -245,27 +263,38 @@ class ReadNotifsWorker(CancellableTokenWorker):
             for server_name, channel_ids in grouped_channels.items():
                 if not channel_ids:
                     continue
-                read_states_payload = [{"channel_id": c, "message_id": massive_message_id, "read_state_type": 0} for c in channel_ids]
-                chunks = [read_states_payload[i:i + chunk_size] for i in range(0, len(read_states_payload), chunk_size)]
+                read_states_payload = [
+                    {"channel_id": c, "message_id": massive_message_id, "read_state_type": 0}
+                    for c in channel_ids
+                ]
+                chunks = [
+                    read_states_payload[i:i + chunk_size]
+                    for i in range(0, len(read_states_payload), chunk_size)
+                ]
                 for chunk in chunks:
                     all_chunks.append((server_name, chunk))
 
             total_chunks = len(all_chunks)
             success_count = 0
             fail_count = 0
-            
+
             for idx, (server_name, chunk) in enumerate(all_chunks, 1):
                 if self.is_cancelled():
-                    break
+                    self.finished_signal.emit(success_count, fail_count, "Cancelled")
+                    return
                 self.progress_signal.emit(f"[*] Marking {server_name} as read... ({idx}/{total_chunks})")
                 self.chunk_progress_signal.emit(idx, total_chunks)
                 try:
-                    r = dmc._make_api_request("POST", "/read-states/ack-bulk", self.token, json={"read_states": chunk}, quiet=True, cancel_event=self._cancel_event)
+                    r = dmc._make_api_request(
+                        "POST", "/read-states/ack-bulk", self.token,
+                        json={"read_states": chunk}, quiet=True, cancel_event=self._cancel_event
+                    )
                     if r.status_code in (200, 204):
                         success_count += len(chunk)
                     else:
                         fail_count += len(chunk)
                 except dmc.RequestCancelled:
+                    self.finished_signal.emit(success_count, fail_count, "Cancelled")
                     return
                 except Exception as e:
                     fail_count += len(chunk)

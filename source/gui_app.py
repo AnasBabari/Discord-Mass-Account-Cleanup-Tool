@@ -1,14 +1,18 @@
-# pyrefly: ignore[missing-import]
 import sys
 import os
 import time
 import tempfile
 import keyring
-from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QStackedWidget, QFrame
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QStackedWidget, QFrame
+)
 from PyQt5.QtCore import Qt, QTimer, QSize, QObject, pyqtSignal
-from PyQt5.QtGui import QFont, QCursor, QFontMetrics, QPixmap
+from PyQt5.QtGui import QFont, QCursor, QPixmap
 import qtawesome as qta
-from ui.theme import *
+from ui.theme import (
+    ACCENT, BG_DARKEST, DANGER, TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY, load_stylesheet
+)
 from ui.components import ToastOverlay
 from ui.pages.login import LoginPage
 from ui.pages.servers import ServersPage
@@ -22,16 +26,22 @@ import discord_mass_cleanup as dmc
 SERVICE_ID = "DiscordMassCleanupTool"
 KEY_ID = "user_token"
 
+
 class StreamInterceptor(QObject):
     log_signal = pyqtSignal(str, str)
+
     def __init__(self, msg_type="debug"):
         super().__init__()
         self.msg_type = msg_type
+
     def write(self, msg):
         if msg.strip():
             cleaned = dmc.sanitize_token(msg.strip())
             self.log_signal.emit(cleaned, self.msg_type)
-    def flush(self): pass
+
+    def flush(self):
+        pass
+
 
 class MainWindow(QMainWindow):
     def track_worker(self, worker):
@@ -60,7 +70,7 @@ class MainWindow(QMainWindow):
         self._active_workers = set()
         self.login_worker = None
         self._session_generation = 0
-        
+
         def my_excepthook(type, value, tback):
             import traceback
             crash_dir = os.path.join(tempfile.gettempdir(), "discord-mass-cleanup-tool")
@@ -76,16 +86,16 @@ class MainWindow(QMainWindow):
         self.resize(1100, 750)
         self.setMinimumSize(900, 600)
         self.setStyleSheet(load_stylesheet())
-        
+
         self.token = ""
         self.account_name = ""
-        
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
+
         # ── Sidebar ─────────────────────────────────────────────────────────
         self.sidebar = QWidget()
         self.sidebar.setObjectName("Sidebar")
@@ -93,7 +103,7 @@ class MainWindow(QMainWindow):
         sidebar_layout = QVBoxLayout(self.sidebar)
         sidebar_layout.setContentsMargins(16, 20, 16, 20)
         sidebar_layout.setSpacing(4)
-        
+
         brand_frame = QFrame()
         brand_frame.setObjectName("BrandFrame")
         brand_frame.setStyleSheet("""
@@ -157,7 +167,7 @@ class MainWindow(QMainWindow):
 
         brand_layout.addLayout(title_layout)
         sidebar_layout.addWidget(brand_frame)
-        
+
         nav_label = QLabel("• NAVIGATION")
         nav_label.setStyleSheet(f"""
             color: {TEXT_DIM};
@@ -167,7 +177,7 @@ class MainWindow(QMainWindow):
             padding: 12px 4px 6px 4px;
         """)
         sidebar_layout.addWidget(nav_label)
-        
+
         self.nav_btns = {}
         nav_items = [
             ("Servers",       'fa5s.server',        "servers"),
@@ -176,7 +186,7 @@ class MainWindow(QMainWindow):
             ("Notifications", 'fa5s.bell',          "notifications"),
             ("Terminal",      'fa5s.terminal',      "logs")
         ]
-        
+
         for text, icon_name, ref in nav_items:
             btn = QPushButton(f"  {text}")
             btn.setObjectName("NavBtn")
@@ -187,16 +197,16 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda checked, r=ref, b=btn: self._on_nav_click(r, b))
             sidebar_layout.addWidget(btn)
             self.nav_btns[ref] = btn
-            
+
         sidebar_layout.addStretch()
 
         self.account_frame = QFrame()
-        self.account_frame.setStyleSheet(f"""
-            QFrame {{
+        self.account_frame.setStyleSheet("""
+            QFrame {
                 background-color: rgba(56, 189, 248, 0.05);
                 border: 1px solid rgba(56, 189, 248, 0.1);
                 border-radius: 10px;
-            }}
+            }
         """)
         account_layout = QVBoxLayout(self.account_frame)
         account_layout.setContentsMargins(12, 10, 12, 10)
@@ -215,7 +225,7 @@ class MainWindow(QMainWindow):
             font-size: 11px;
         """)
         account_header.addWidget(self.account_avatar)
-        
+
         acct_lbl = QLabel("Account")
         acct_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px; font-weight: 600; letter-spacing: 0.5px;")
         account_header.addWidget(acct_lbl)
@@ -223,7 +233,9 @@ class MainWindow(QMainWindow):
         account_layout.addLayout(account_header)
 
         self.account_name_label = QLabel("")
-        self.account_name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 14px; font-weight: 600; padding-left: 32px;")
+        self.account_name_label.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 14px; font-weight: 600; padding-left: 32px;"
+        )
         self.account_name_label.setWordWrap(True)
         account_layout.addWidget(self.account_name_label)
 
@@ -231,12 +243,12 @@ class MainWindow(QMainWindow):
         self.account_frame.hide()
 
         sidebar_layout.addSpacing(8)
-        
+
         separator = QFrame()
         separator.setFixedHeight(1)
-        separator.setStyleSheet(f"background-color: rgba(239, 68, 68, 0.15); margin: 0 8px;")
+        separator.setStyleSheet("background-color: rgba(239, 68, 68, 0.15); margin: 0 8px;")
         sidebar_layout.addWidget(separator)
-        
+
         self.logout_btn = QPushButton("  Sign Out")
         self.logout_btn.setObjectName("LogoutBtn")
         self.logout_btn.setIcon(qta.icon('fa5s.sign-out-alt', color=DANGER))
@@ -244,13 +256,13 @@ class MainWindow(QMainWindow):
         self.logout_btn.setCursor(QCursor(Qt.PointingHandCursor))
         self.logout_btn.clicked.connect(self.logout)
         sidebar_layout.addWidget(self.logout_btn)
-        
+
         main_layout.addWidget(self.sidebar)
-        
+
         # ── Content Area ────────────────────────────────────────────────────
         self.pages = QStackedWidget()
         main_layout.addWidget(self.pages)
-        
+
         self.login_page = LoginPage()
         self.login_page.login_requested.connect(self.start_login)
         self.pages.addWidget(self.login_page)
@@ -267,17 +279,21 @@ class MainWindow(QMainWindow):
 
         self.blocked_page = BlockedPage(worker_tracker=self.track_worker)
         self.blocked_page.log_msg_signal.connect(self.log_msg)
-        self.blocked_page.action_finished.connect(lambda: self.toast.show_message("Users Unblocked Successfully", msg_type="success"))
+        self.blocked_page.action_finished.connect(
+            lambda: self.toast.show_message("Users Unblocked Successfully", msg_type="success")
+        )
         self.pages.addWidget(self.blocked_page)
 
         self.notifications_page = NotificationsPage(worker_tracker=self.track_worker)
         self.notifications_page.log_msg_signal.connect(self.log_msg)
-        self.notifications_page.action_finished.connect(lambda msg, mtype: self.toast.show_message(msg, msg_type=mtype))
+        self.notifications_page.action_finished.connect(
+            lambda msg, mtype: self.toast.show_message(msg, msg_type=mtype)
+        )
         self.pages.addWidget(self.notifications_page)
 
         self.logs_page = LogsPage()
         self.pages.addWidget(self.logs_page)
-        
+
         self.stdout_interceptor = StreamInterceptor("debug")
         self.stdout_interceptor.log_signal.connect(self.log_msg)
         sys.stdout = self.stdout_interceptor
@@ -285,13 +301,12 @@ class MainWindow(QMainWindow):
         self.stderr_interceptor = StreamInterceptor("error")
         self.stderr_interceptor.log_signal.connect(self.log_msg)
         sys.stderr = self.stderr_interceptor
-        
+
         self.toast = ToastOverlay(self)
-        
 
         self.set_authenticated(False)
         self.switch_page("login")
-        
+
         QTimer.singleShot(100, self.check_saved_token)
 
     def _on_nav_click(self, ref, btn):
@@ -301,20 +316,20 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self.toast.isVisible():
             self.toast.reposition()
-            
+
     def set_authenticated(self, state):
         for btn in self.nav_btns.values():
             btn.setEnabled(state)
         self.logout_btn.setVisible(state)
         self.account_frame.setVisible(state)
-        
+
     def switch_page(self, ref):
         for name, btn in self.nav_btns.items():
             is_active = name == ref
             btn.setChecked(is_active)
             nav_icons = {
                 "servers": 'fa5s.server',
-                "friends": 'mdi.account-multiple',
+                "friends": 'fa5s.user-friends',
                 "blocked": 'fa5s.user-slash',
                 "notifications": 'fa5s.bell',
                 "logs": 'fa5s.terminal'
@@ -322,7 +337,7 @@ class MainWindow(QMainWindow):
             if name in nav_icons:
                 color = ACCENT if is_active else TEXT_SECONDARY
                 btn.setIcon(qta.icon(nav_icons[name], color=color))
-            
+
         page_index = {"login": 0, "servers": 1, "friends": 2, "blocked": 3, "notifications": 4, "logs": 5}.get(ref, 0)
         self.pages.setCurrentIndex(page_index)
 
@@ -349,7 +364,7 @@ class MainWindow(QMainWindow):
             self.login_worker.cancel()
         self.login_page.set_loading(True)
         self.login_page.set_status("")
-        
+
         self.login_worker = self.track_worker(LoginWorker(token, save=save))
         self.login_worker.result_signal.connect(
             lambda *args, generation=generation: self._accept_login_result(generation, *args)
@@ -363,7 +378,7 @@ class MainWindow(QMainWindow):
 
     def on_login_result(self, success, message, raw_username, token, avatar_bytes, save):
         self.login_page.set_loading(False)
-        
+
         if not success:
             self.log_msg(f"AUTH FAILED: {message}", "error")
             self.login_page.set_status(f"Authentication failed: {message}")
@@ -374,18 +389,17 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
             return
-            
+
         self.log_msg(f"AUTH OK: {message}", "success")
         self.account_name = message
         self.account_name_label.setText(self.account_name)
         if self.account_name:
             if avatar_bytes:
                 from PyQt5.QtGui import QPainter, QPainterPath
-                from PyQt5.QtCore import Qt
                 pixmap = QPixmap()
                 if pixmap.loadFromData(avatar_bytes):
                     pixmap = pixmap.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    
+
                     # Create circular mask
                     rounded = QPixmap(24, 24)
                     rounded.fill(Qt.transparent)
@@ -396,16 +410,22 @@ class MainWindow(QMainWindow):
                     painter.setClipPath(path)
                     painter.drawPixmap(0, 0, pixmap)
                     painter.end()
-                    
+
                     self.account_avatar.setStyleSheet("background-color: transparent;")
                     self.account_avatar.setPixmap(rounded)
                     self.account_avatar.setText("")
                 else:
-                    self.account_avatar.setStyleSheet(f"background-color: {ACCENT}; color: {BG_DARKEST}; border-radius: 12px; font-weight: 700; font-size: 11px;")
+                    self.account_avatar.setStyleSheet(
+                        f"background-color: {ACCENT}; color: {BG_DARKEST}; "
+                        f"border-radius: 12px; font-weight: 700; font-size: 11px;"
+                    )
                     self.account_avatar.setText(self.account_name[0].upper() if self.account_name else "?")
                     self.account_avatar.setPixmap(QPixmap())
             else:
-                self.account_avatar.setStyleSheet(f"background-color: {ACCENT}; color: {BG_DARKEST}; border-radius: 12px; font-weight: 700; font-size: 11px;")
+                self.account_avatar.setStyleSheet(
+                    f"background-color: {ACCENT}; color: {BG_DARKEST}; "
+                    f"border-radius: 12px; font-weight: 700; font-size: 11px;"
+                )
                 self.account_avatar.setText(self.account_name[0].upper() if self.account_name else "?")
                 self.account_avatar.setPixmap(QPixmap())
             self.setWindowTitle(f"Cleanup Tool - {self.account_name}")
@@ -422,11 +442,11 @@ class MainWindow(QMainWindow):
                 keyring.set_password(SERVICE_ID, KEY_ID, token)
             except Exception as e:
                 self.log_msg(f"Failed to save token: {e}", "error")
-            
+
         self.set_authenticated(True)
         self.login_page.clear()
         self.switch_page("servers")
-        
+
         self.servers_page.fetch_data()
         self.friends_page.fetch_data()
         self.blocked_page.fetch_data()
@@ -437,7 +457,10 @@ class MainWindow(QMainWindow):
         self.token = ""
         self.account_name = ""
         self.account_name_label.setText("")
-        self.account_avatar.setStyleSheet(f"background-color: {ACCENT}; color: {BG_DARKEST}; border-radius: 12px; font-weight: 700; font-size: 11px;")
+        self.account_avatar.setStyleSheet(
+            f"background-color: {ACCENT}; color: {BG_DARKEST}; "
+            f"border-radius: 12px; font-weight: 700; font-size: 11px;"
+        )
         self.account_avatar.setText("?")
         self.account_avatar.setPixmap(QPixmap())
         self.setWindowTitle("Discord Mass Account Cleanup Tool")
@@ -448,7 +471,7 @@ class MainWindow(QMainWindow):
             pass
         self.set_authenticated(False)
         self.switch_page("login")
-        
+
         self.servers_page.clear()
         self.friends_page.clear()
         self.blocked_page.clear()
@@ -463,12 +486,13 @@ class MainWindow(QMainWindow):
         sys.excepthook = self._original_excepthook
         super().closeEvent(event)
 
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     font = QFont("Segoe UI", 10)
     font.setHintingPreference(QFont.PreferFullHinting)
     app.setFont(font)
-    
+
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

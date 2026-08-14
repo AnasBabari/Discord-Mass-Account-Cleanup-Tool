@@ -1,20 +1,9 @@
-"""
-Discord Mass Account Cleanup Tool
-================================
-Lets you mass leave servers and mass remove friends.
-
-Requirements:
-    pip install requests websocket-client
-
-Usage:
-    python discord_mass_cleanup.py
-"""
-
 import sys
 import re
 import json
 import time
 import threading
+from typing import Any
 import websocket
 import requests as standard_requests
 
@@ -23,18 +12,18 @@ try:
     from curl_cffi.requests.errors import RequestsError as CurlNetworkError
     HAS_CURL_CFFI = True
 except ImportError:
-    curl_requests = None
-    CurlNetworkError = None
+    curl_requests = None  # type: ignore[assignment]
+    CurlNetworkError = None  # type: ignore[assignment, misc]
     HAS_CURL_CFFI = False
 
-requests = curl_requests or standard_requests
-NetworkError = CurlNetworkError or standard_requests.exceptions.RequestException
-NETWORK_ERROR_TYPES = tuple(
-    error_type
-    for error_type in (CurlNetworkError, standard_requests.exceptions.RequestException)
-    if error_type is not None
-)
+requests: Any = curl_requests or standard_requests
+HTTP_TRANSPORT: Any = requests
+NetworkError: Any = CurlNetworkError if HAS_CURL_CFFI else standard_requests.exceptions.RequestException
 
+_err_list: list[type[Exception]] = [standard_requests.exceptions.RequestException]
+if HAS_CURL_CFFI:
+    _err_list.append(CurlNetworkError)  # type: ignore[arg-type]
+NETWORK_ERROR_TYPES: tuple[type[Exception], ...] = tuple(_err_list)
 
 BASE_URL = "https://discord.com/api/v10"
 REQUEST_DELAY = 0.6  # seconds between requests (be polite to the API)
@@ -45,13 +34,13 @@ def sanitize_token(text: str) -> str:
     """Redact standard Discord user tokens, modern MFA tokens, and Auth headers from text."""
     if not text:
         return text
-    # Redact standard 3-part Discord user tokens
-    sanitized = re.sub(r'([A-Za-z0-9_-]{24,28}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,38})', '[REDACTED_TOKEN]', text)
+    # Redact standard 3-part Discord user/bot tokens (part 3 can be 27 to 86 chars)
+    sanitized = re.sub(r'([A-Za-z0-9_-]{24,28}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,86})', '[REDACTED_TOKEN]', text)
     # Redact Discord MFA tokens (e.g., mfa.XXXX...)
-    sanitized = re.sub(r'(mfa\.[A-Za-z0-9_-]{70,100})', '[REDACTED_TOKEN]', sanitized)
-    # Redact Authorization header values in strings / JSON dumps
-    sanitized = re.sub(r'("Authorization":\s*")[^"]+(")', r'\1[REDACTED_TOKEN]\2', sanitized)
-    sanitized = re.sub(r"('Authorization':\s*')[^']+(')", r"\1[REDACTED_TOKEN]\2", sanitized)
+    sanitized = re.sub(r'(mfa\.[A-Za-z0-9_-]{70,120})', '[REDACTED_TOKEN]', sanitized)
+    # Redact Authorization header values and token query parameters in strings / JSON dumps / raw headers
+    sanitized = re.sub(r'([Aa]uthorization[\'"]?\s*[:=]\s*[\'"]?)[^\s\'",]+', r'\1[REDACTED_TOKEN]', sanitized)
+    sanitized = re.sub(r'(token=)[^\s&\'",]+', r'\1[REDACTED_TOKEN]', sanitized)
     return sanitized
 
 
@@ -141,7 +130,7 @@ def _make_api_request(
     cancel_event=None,
     transport=None,
     **kwargs,
-) -> requests.Response:
+) -> Any:
     """Helper for Discord API requests with shared rate-limit and timeout handling."""
     headers = {"Authorization": token}
     url = f"{BASE_URL}{endpoint}"
@@ -161,11 +150,9 @@ def _make_api_request(
                 if not quiet:
                     print("  ⏳  Request timed out — retrying…")
                 retries += 1
-                REQUEST_COORDINATOR.backoff(2)
-                if not REQUEST_COORDINATOR.delay(2, cancel_event):
-                    REQUEST_COORDINATOR.clear_backoff()
+                REQUEST_COORDINATOR.backoff(2.0)
+                if not REQUEST_COORDINATOR.delay(2.0, cancel_event):
                     raise RequestCancelled("Request cancelled during retry delay")
-                REQUEST_COORDINATOR.clear_backoff()
                 continue
             raise
         except Exception as e:
@@ -173,41 +160,41 @@ def _make_api_request(
                 if not quiet:
                     print("  ⏳  Request timed out — retrying…")
                 retries += 1
-                REQUEST_COORDINATOR.backoff(2)
-                if not REQUEST_COORDINATOR.delay(2, cancel_event):
-                    REQUEST_COORDINATOR.clear_backoff()
+                REQUEST_COORDINATOR.backoff(2.0)
+                if not REQUEST_COORDINATOR.delay(2.0, cancel_event):
                     raise RequestCancelled("Request cancelled during retry delay")
-                REQUEST_COORDINATOR.clear_backoff()
                 continue
             raise
 
         if r.status_code == 429:
+            wait_val: float = 5.0
             if "<html" in r.text.lower():
                 if "1015" in r.text:
-                    raise RuntimeError("Cloudflare IP Ban (Error 1015) - You are making requests too fast and Discord blocked your IP for 1 hour.")
+                    raise RuntimeError(
+                        "Cloudflare IP Ban (Error 1015) - You are making requests too fast "
+                        "and Discord blocked your IP for 1 hour."
+                    )
                 # Non-1015 HTML 429 (generic Cloudflare rate limit) — use default wait
-                wait = 5.0
+                wait_val = 5.0
             else:
-                wait = None
+                parsed_wait = None
                 try:
                     payload = r.json()
                     if isinstance(payload, dict) and payload.get("retry_after") is not None:
-                        wait = float(payload["retry_after"])
+                        parsed_wait = float(payload["retry_after"])
                 except (ValueError, TypeError, AttributeError):
                     pass
-                if wait is None:
+                if parsed_wait is None:
                     try:
-                        wait = float(r.headers.get("Retry-After", 5.0))
+                        parsed_wait = float(r.headers.get("Retry-After", 5.0))
                     except (TypeError, ValueError):
-                        wait = 5.0
-                wait = max(0.0, wait)
+                        parsed_wait = 5.0
+                wait_val = max(0.0, parsed_wait)
             if not quiet:
-                print(f"  ⏳  Rate-limited — waiting {wait:.2f}s…")
-            REQUEST_COORDINATOR.backoff(wait)
-            if not REQUEST_COORDINATOR.delay(wait, cancel_event):
-                REQUEST_COORDINATOR.clear_backoff()
+                print(f"  ⏳  Rate-limited — waiting {wait_val:.2f}s…")
+            REQUEST_COORDINATOR.backoff(wait_val)
+            if not REQUEST_COORDINATOR.delay(wait_val, cancel_event):
                 raise RequestCancelled("Request cancelled during rate-limit delay")
-            REQUEST_COORDINATOR.clear_backoff()
             retries += 1
             continue
 
@@ -219,7 +206,7 @@ def _make_api_request(
 # ── API helpers (Servers) ─────────────────────────────────────────────────────
 
 
-def get_clean_error(r: requests.Response) -> str:
+def get_clean_error(r: Any) -> str:
     """Helper to extract a clean error message, avoiding huge HTML dumps."""
     text = r.text
     if "<html" in text.lower():
@@ -296,6 +283,7 @@ def remove_friend(token: str, user_id: str, cancel_event=None) -> tuple[int, str
     r = _make_api_request("DELETE", f"/users/@me/relationships/{user_id}", token, cancel_event=cancel_event)
     return r.status_code, get_clean_error(r)
 
+
 def get_blocked_users(token: str, cancel_event=None) -> list[dict]:
     """Fetch all blocked users."""
     r = _make_api_request("GET", "/users/@me/relationships", token, cancel_event=cancel_event)
@@ -311,6 +299,7 @@ def get_blocked_users(token: str, cancel_event=None) -> list[dict]:
     # type 2 is blocked
     blocked = [rel for rel in relationships if rel.get("type") == 2]
     return blocked
+
 
 def unblock_user(token: str, user_id: str, cancel_event=None) -> tuple[int, str]:
     """Unblock a user by user ID."""
@@ -364,26 +353,28 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
                                     "last_message_id": entry.get("last_message_id"),
                                     "mention_count": entry.get("mention_count", 0)
                                 }
-                    
                     user_guild_settings = d.get("user_guild_settings", [])
                     muted_guilds = set()
                     muted_channels = set()
                     unmuted_channels = set()
-                    
+
                     if isinstance(user_guild_settings, list):
                         for ugs in user_guild_settings:
-                            if not isinstance(ugs, dict): continue
+                            if not isinstance(ugs, dict):
+                                continue
                             if ugs.get("muted"):
                                 g_id = ugs.get("guild_id")
                                 if g_id:
                                     muted_guilds.add(g_id)
-                            
+
                             overrides = ugs.get("channel_overrides", [])
                             if isinstance(overrides, list):
                                 for override in overrides:
-                                    if not isinstance(override, dict): continue
+                                    if not isinstance(override, dict):
+                                        continue
                                     c_id = override.get("channel_id")
-                                    if not c_id: continue
+                                    if not c_id:
+                                        continue
                                     if override.get("muted"):
                                         muted_channels.add(c_id)
                                     elif "muted" in override and not override["muted"]:
@@ -391,17 +382,17 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
 
                     def is_unread(channel_id, channel_last_msg_id, guild_id=None):
                         if not channel_last_msg_id:
-                            return False # No messages to read
-                            
+                            return False  # No messages to read
+
                         state = read_map.get(channel_id, {})
                         mention_count = state.get("mention_count", 0)
-                        
+
                         if channel_id in unmuted_channels:
-                            pass # Channel is explicitly unmuted
+                            pass  # Channel is explicitly unmuted
                         elif channel_id in muted_channels:
-                            return False # Channel is explicitly muted
+                            return False  # Channel is explicitly muted
                         elif guild_id and guild_id in muted_guilds:
-                            return False # Parent guild is muted
+                            return False  # Parent guild is muted
 
                         read_last_id = state.get("last_message_id")
                         if not read_last_id:
@@ -416,7 +407,11 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
                     if isinstance(guilds, list):
                         for guild in guilds:
                             if isinstance(guild, dict):
-                                server_name = guild.get("properties", {}).get("name") or guild.get("name") or "Unknown Server"
+                                server_name = (
+                                    guild.get("properties", {}).get("name")
+                                    or guild.get("name")
+                                    or "Unknown Server"
+                                )
                                 g_id = guild.get("id")
                                 unread = []
                                 if "channels" in guild and isinstance(guild["channels"], list):
@@ -435,21 +430,20 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
                                                 unread.append(c_id)
                                 if unread:
                                     grouped_channels[server_name] = unread
-                                            
-                    # 3. Grab all private channels
+
+                    # 3. Iterate DMs and Group DMs (private channels)
                     private_channels = d.get("private_channels", [])
                     if isinstance(private_channels, list):
-                        dm_unread = []
-                        for pc in private_channels:
-                            if isinstance(pc, dict) and pc.get("id"):
-                                c_id = pc.get("id")
-                                c_last_id = pc.get("last_message_id")
+                        unread_dms = []
+                        for dm in private_channels:
+                            if isinstance(dm, dict) and dm.get("id"):
+                                c_id = dm.get("id")
+                                c_last_id = dm.get("last_message_id")
                                 if is_unread(c_id, c_last_id):
-                                    dm_unread.append(c_id)
-                        if dm_unread:
-                            grouped_channels["Direct Messages"] = dm_unread
-                                
-                print("  [WS] Successfully downloaded read states and channel lists.")
+                                    unread_dms.append(c_id)
+                        if unread_dms:
+                            grouped_channels["Direct Messages"] = unread_dms
+
                 ws.close()
         except Exception as e:
             print(f"  [WS] Exception in on_message: {e}")
@@ -460,7 +454,8 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
             "op": 2,
             "d": {
                 "token": token,
-                "capabilities": 16381,  # Discord's internal client capabilities bitfield (may need updating if READY stops arriving)
+                # Discord internal client capabilities bitfield:
+                "capabilities": 16381,
                 "properties": {
                     "os": "Windows",
                     "browser": "Chrome",
@@ -495,7 +490,7 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
         on_message=on_message,
         on_error=on_error,
     )
-    
+
     # Run in a thread to allow timeout
     wst = threading.Thread(target=ws.run_forever)
     wst.daemon = True
@@ -505,21 +500,23 @@ def _get_read_states(token: str, cancel_event=None) -> dict[str, list[str]]:
         if cancel_event is not None and cancel_event.is_set():
             ws.keep_running = False
             try:
-                if getattr(ws, "sock", None):
-                    ws.sock.close()
+                sock = getattr(ws, "sock", None)
+                if sock is not None:
+                    sock.close()
             except Exception:
                 pass
             ws.close()
             wst.join(timeout=1.0)
             raise RequestCancelled("WebSocket request cancelled")
         wst.join(timeout=0.1)
-    
+
     if wst.is_alive():
         print("  [WS] Timeout waiting for READY event. Aborting connection.")
         ws.keep_running = False
         try:
-            if getattr(ws, "sock", None):
-                ws.sock.close()
+            sock = getattr(ws, "sock", None)
+            if sock is not None:
+                sock.close()
         except Exception:
             pass
         ws.close()
@@ -868,7 +865,7 @@ def mass_unblock_users(token: str) -> None:
 
 def mass_read_notifications(token: str) -> None:
     print("\nFetching your unread notifications…")
-    
+
     try:
         grouped_channels = _get_read_states(token)
     except RuntimeError as e:
@@ -878,19 +875,19 @@ def mass_read_notifications(token: str) -> None:
     if not grouped_channels:
         print("No channels found to mark as read.")
         return
-        
+
     total_unread = sum(len(c) for c in grouped_channels.values())
     if total_unread == 0:
         print("No channels found to mark as read.")
         return
-        
+
     print(f"\nFound {total_unread} channel(s) to process.")
-    
+
     confirm = input("Type 'yes' to mark ALL DMs and Servers as read: ").strip()
     if confirm.lower() != "yes":
         print("Cancelled.")
         return
-    
+
     # Generate a Snowflake for the current time + 1 hour to ensure it's in the future
     # Discord epoch is 1420070400000
     current_time_ms = int(time.time() * 1000)
@@ -899,11 +896,11 @@ def mass_read_notifications(token: str) -> None:
 
     success_count = 0
     fail_count = 0
-    
+
     for server_name, channel_ids in grouped_channels.items():
         if not channel_ids:
             continue
-            
+
         print(f"\n  >  Marking {server_name} as read...")
         read_states_payload = []
         for c_id in channel_ids:
@@ -916,7 +913,7 @@ def mass_read_notifications(token: str) -> None:
         # Chunk the payload into batches of 100 to avoid payload size limits
         chunk_size = 100
         chunks = [read_states_payload[i:i + chunk_size] for i in range(0, len(read_states_payload), chunk_size)]
-        
+
         for i, chunk in enumerate(chunks):
             payload = {"read_states": chunk}
             print(f"\r     Sending bulk acknowledgment... ({i+1}/{len(chunks)} chunks)", end="", flush=True)
@@ -947,16 +944,24 @@ def mass_read_notifications(token: str) -> None:
     else:
         print(f"Done — marked read {success_count}, failed {fail_count}.")
 
+
 def get_masked_input(prompt: str = "Paste token: ", mask: str = "*") -> str:
-    """A cross-platform masked input that correctly handles Ctrl+C."""
+    """A cross-platform masked input that correctly handles Ctrl+C and special keys."""
     if sys.platform == "win32":
         import msvcrt
         sys.stdout.write(prompt)
         sys.stdout.flush()
-        entered = []
+        entered: list[str] = []
         while True:
-            # getwch() handles Unicode characters properly on Windows
-            key = ord(msvcrt.getwch())
+            char = msvcrt.getwch()
+            key = ord(char)
+            if key in (0, 224):
+                # Extended key prefix (arrow keys, function keys, delete) - discard sub-code
+                try:
+                    msvcrt.getwch()
+                except Exception:
+                    pass
+                continue
             if key == 13:  # Enter
                 sys.stdout.write("\n")
                 return "".join(entered)
@@ -972,10 +977,11 @@ def get_masked_input(prompt: str = "Paste token: ", mask: str = "*") -> str:
             else:
                 sys.stdout.write(mask)
                 sys.stdout.flush()
-                entered.append(chr(key))
+                entered.append(char)
     else:
         import getpass
         return getpass.getpass(prompt)
+
 
 def main() -> None:
     print("\n╔══════════════════════════════════════════╗")

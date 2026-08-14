@@ -1,8 +1,15 @@
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel, QWidget, QPushButton, QGraphicsDropShadowEffect, QGraphicsOpacityEffect
+from PyQt5.QtWidgets import (
+    QFrame, QHBoxLayout, QVBoxLayout, QLabel, QWidget, QPushButton,
+    QGraphicsDropShadowEffect
+)
 from PyQt5.QtCore import QSize, Qt, QTimer, QPoint, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QColor, QCursor
 import qtawesome as qta
-from ui.theme import *
+from ui.theme import (
+    ACCENT, BG_CARD, DANGER, SUCCESS,
+    TEXT_DIM, TEXT_PRIMARY, TEXT_SECONDARY, WARNING
+)
+
 
 def get_length_str(snowflake_id, fallback_timestamp=None):
     from datetime import datetime, timezone
@@ -10,11 +17,15 @@ def get_length_str(snowflake_id, fallback_timestamp=None):
     if fallback_timestamp:
         try:
             dt = datetime.fromisoformat(fallback_timestamp.replace('Z', '+00:00'))
-        except (ValueError, TypeError, OverflowError):
+        except (ValueError, TypeError, OverflowError, OSError):
             pass
     if not dt and snowflake_id and str(snowflake_id).isdigit():
-        ms = (int(snowflake_id) >> 22) + 1420070400000
-        dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        try:
+            ms = (int(snowflake_id) >> 22) + 1420070400000
+            if 0 < ms < 10000000000000:
+                dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        except (ValueError, TypeError, OverflowError, OSError):
+            pass
     if not dt:
         return "Unknown"
     if dt.tzinfo is None:
@@ -22,9 +33,12 @@ def get_length_str(snowflake_id, fallback_timestamp=None):
     now = datetime.now(timezone.utc)
     diff = now - dt
     days = diff.days
-    if days < 0: return "0 days"
-    if days < 30: return f"{days} days"
-    if days < 365: return f"{days // 30} months"
+    if days < 0:
+        return "0 days"
+    if days < 30:
+        return f"{days} days"
+    if days < 365:
+        return f"{days // 30} months"
     years = days // 365
     return f"{years} year{'s' if years > 1 else ''}"
 
@@ -66,12 +80,12 @@ class StatCard(QFrame):
         if icon_name:
             icon_box = QFrame()
             icon_box.setFixedSize(38, 38)
-            icon_box.setStyleSheet(f"""
-                QFrame {{
+            icon_box.setStyleSheet("""
+                QFrame {
                     background-color: rgba(56, 189, 248, 0.08);
                     border: 1px solid rgba(56, 189, 248, 0.15);
                     border-radius: 10px;
-                }}
+                }
             """)
             ib_layout = QVBoxLayout(icon_box)
             ib_layout.setContentsMargins(0, 0, 0, 0)
@@ -86,11 +100,17 @@ class StatCard(QFrame):
         text_layout.setAlignment(Qt.AlignVCenter)
 
         self.title_lbl = QLabel(title.upper())
-        self.title_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px; font-weight: 700; letter-spacing: 0.6px; background: transparent; border: none;")
+        self.title_lbl.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 10px; font-weight: 700; "
+            f"letter-spacing: 0.6px; background: transparent; border: none;"
+        )
         text_layout.addWidget(self.title_lbl)
 
         self.val_lbl = QLabel(str(initial_val))
-        self.val_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 700; background: transparent; border: none;")
+        self.val_lbl.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 700; "
+            f"background: transparent; border: none;"
+        )
         text_layout.addWidget(self.val_lbl)
 
         layout.addLayout(text_layout)
@@ -205,10 +225,10 @@ class ToastOverlay(QFrame):
         if not self.queue:
             self.is_showing = False
             return
-            
+
         self.is_showing = True
         message, duration, msg_type = self.queue.pop(0)
-        
+
         icon_map = {
             "info":    ("fa5s.check-circle", SUCCESS),
             "error":   ("fa5s.exclamation-circle", DANGER),
@@ -249,7 +269,7 @@ class ToastOverlay(QFrame):
         self.slide_out_anim.setEasingCurve(QEasingCurve.InCubic)
         self.slide_out_anim.finished.connect(self._on_fade_out_finished)
         self.slide_out_anim.start()
-        
+
     def reposition(self):
         if not self.parent():
             return
@@ -295,20 +315,22 @@ class StatBadge(QFrame):
     """A small badge displaying a stat like 'Selected: 3 / 10'."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(f"""
-            QFrame {{
+        self.setStyleSheet("""
+            QFrame {
                 background-color: rgba(56, 189, 248, 0.08);
                 border: 1px solid rgba(56, 189, 248, 0.2);
                 border-radius: 8px;
                 padding: 0px;
-            }}
+            }
         """)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(4)
 
         self.label = QLabel("Selected: 0 / 0")
-        self.label.setStyleSheet(f"color: {ACCENT}; font-weight: 600; font-size: 12px; border: none; background: transparent;")
+        self.label.setStyleSheet(
+            f"color: {ACCENT}; font-weight: 600; font-size: 12px; border: none; background: transparent;"
+        )
         layout.addWidget(self.label)
 
     def setText(self, text):

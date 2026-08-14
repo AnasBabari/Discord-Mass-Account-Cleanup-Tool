@@ -1,15 +1,10 @@
 import sys
 import pytest
 from unittest.mock import patch, MagicMock
-from PyQt5.QtWidgets import QApplication, QLineEdit
+from PyQt5.QtWidgets import QLineEdit
 from gui_app import MainWindow
 from ui.pages.login import LoginPage
-from ui.pages.servers import ServersPage
-from ui.pages.friends import FriendsPage
-from ui.pages.blocked import BlockedPage
-from ui.pages.notifications import NotificationsPage
-from ui.pages.logs import LogsPage
-from workers import LoginWorker
+
 
 @pytest.fixture
 def app(qtbot):
@@ -17,35 +12,38 @@ def app(qtbot):
     qtbot.addWidget(main_window)
     return main_window
 
+
 def test_main_window_initialization(app):
     assert app.windowTitle() == "Discord Mass Account Cleanup Tool"
     assert app.pages.count() == 6
-    
+
+
 def test_page_switching(app, qtbot):
     assert app.pages.currentIndex() == 0
-    
+
     app.switch_page("servers")
     assert app.pages.currentIndex() == 1
-    
+
     app.switch_page("friends")
     assert app.pages.currentIndex() == 2
-    
+
     app.switch_page("blocked")
     assert app.pages.currentIndex() == 3
 
     app.switch_page("notifications")
     assert app.pages.currentIndex() == 4
-    
+
     app.switch_page("logs")
     assert app.pages.currentIndex() == 5
+
 
 def test_login_page(qtbot):
     page = LoginPage()
     qtbot.addWidget(page)
-    
+
     assert page.token_entry is not None
     assert page.login_btn is not None
-    
+
     qtbot.keyClicks(page.token_entry, "fake_token")
     assert page.token_entry.text() == "fake_token"
 
@@ -67,7 +65,7 @@ def test_main_window_login_flow(app, qtbot):
          patch("ui.pages.friends.FriendsPage.fetch_data"), \
          patch("ui.pages.blocked.BlockedPage.fetch_data"), \
          patch("keyring.set_password"):
-        
+
         # Test successful login result
         app.on_login_result(True, "DiscordUser", "discorduser", "fake_token", b"", True)
         assert app.token == "fake_token"

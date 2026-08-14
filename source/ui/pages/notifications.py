@@ -1,29 +1,35 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QPushButton, QProgressBar, QGraphicsDropShadowEffect
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QLabel, QPushButton,
+    QProgressBar, QGraphicsDropShadowEffect
+)
 from PyQt5.QtGui import QCursor, QColor
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 import qtawesome as qta
-from ui.theme import *
+from ui.theme import (
+    BG_CARD, BG_DARKEST, TEXT_PRIMARY, TEXT_SECONDARY, WARNING
+)
 from ui.components import SectionHeader
 from workers import ReadNotifsWorker
 
+
 class NotificationsPage(QWidget):
     log_msg_signal = pyqtSignal(str, str)
-    action_finished = pyqtSignal(str, str) # title, msg_type
-    
+    action_finished = pyqtSignal(str, str)  # title, msg_type
+
     def __init__(self, parent=None, worker_tracker=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.token = ""
         self.worker_tracker = worker_tracker or (lambda worker: worker)
         self.read_worker = None
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 24, 32, 32)
         layout.setSpacing(0)
-        
+
         header = SectionHeader('fa5s.bell', 'Notifications Management')
         layout.addWidget(header)
-        
+
         layout.addStretch()
 
         card = QFrame()
@@ -49,12 +55,12 @@ class NotificationsPage(QWidget):
 
         bell_frame = QFrame()
         bell_frame.setFixedSize(68, 68)
-        bell_frame.setStyleSheet(f"""
-            QFrame {{
+        bell_frame.setStyleSheet("""
+            QFrame {
                 background-color: rgba(245, 158, 11, 0.12);
                 border-radius: 22px;
                 border: 1px solid rgba(245, 158, 11, 0.25);
-            }}
+            }
         """)
         bell_inner = QVBoxLayout(bell_frame)
         bell_inner.setContentsMargins(0, 0, 0, 0)
@@ -78,11 +84,14 @@ class NotificationsPage(QWidget):
 
         card_layout.addSpacing(8)
 
-        desc = QLabel("Instantly clear all unread notification badges and pings\nacross all servers, direct messages, and group channels.")
+        desc = QLabel(
+            "Instantly clear all unread notification badges and pings\n"
+            "across all servers, direct messages, and group channels."
+        )
         desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 13px; line-height: 1.5;")
         desc.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(desc)
-        
+
         card_layout.addSpacing(26)
 
         self.read_notifs_btn = QPushButton("  Mark All as Read")
@@ -107,7 +116,7 @@ class NotificationsPage(QWidget):
         card_row.addWidget(card)
         card_row.addStretch()
         layout.addLayout(card_row)
-        
+
         layout.addStretch()
 
     def set_token(self, token):
@@ -121,7 +130,7 @@ class NotificationsPage(QWidget):
         self.read_notifs_btn.setText("  Processing...")
         self.read_notifs_progress.show()
         self.log_msg_signal.emit("Scraping unread states... (ETA: 5-10s)", "info")
-        
+
         self.read_worker = self.worker_tracker(ReadNotifsWorker(self.token))
         self.read_worker.finished.connect(self.read_worker.deleteLater)
         self.read_worker.finished.connect(lambda: setattr(self, "read_worker", None))

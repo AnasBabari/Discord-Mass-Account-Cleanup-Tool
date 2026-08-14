@@ -114,7 +114,7 @@ def test_get_guilds_429(mock_sleep, mock_responses):
     )
     guilds = dmc.get_guilds("test_token")
     assert len(guilds) == 1
-    mock_sleep.assert_called_once_with(0.5)
+    mock_sleep.assert_any_call(0.5)
 
 
 @patch("time.sleep", return_value=None)
@@ -147,7 +147,7 @@ def test_get_guilds_429_retry_after_header(mock_sleep, mock_responses):
     )
     guilds = dmc.get_guilds("test_token")
     assert len(guilds) == 1
-    mock_sleep.assert_called_once_with(0.25)
+    mock_sleep.assert_any_call(0.25)
 
 
 @patch("time.sleep", return_value=None)
@@ -164,7 +164,7 @@ def test_get_guilds_429_json_without_retry_after_uses_header(mock_sleep, mock_re
     )
     guilds = dmc.get_guilds("test_token")
     assert len(guilds) == 1
-    mock_sleep.assert_called_once_with(0.25)
+    mock_sleep.assert_any_call(0.25)
 
 
 def test_get_guilds_http_error(mock_responses):
@@ -195,7 +195,7 @@ def test_leave_guild_429(mock_sleep, mock_responses):
         responses.DELETE, f"{BASE_URL}/users/@me/guilds/123", body="", status=204
     )
     assert dmc.leave_guild("token", "123") == (204, "")
-    mock_sleep.assert_called_once_with(0.5)
+    mock_sleep.assert_any_call(0.5)
 
 
 # --- get_friends tests ---
@@ -235,7 +235,7 @@ def test_get_friends_429(mock_sleep, mock_responses):
     )
     friends = dmc.get_friends("token")
     assert len(friends) == 1
-    mock_sleep.assert_called_once_with(0.5)
+    mock_sleep.assert_any_call(0.5)
 
 
 def test_get_friends_http_error(mock_responses):
@@ -266,15 +266,7 @@ def test_remove_friend_429(mock_sleep, mock_responses):
         responses.DELETE, f"{BASE_URL}/users/@me/relationships/123", body="", status=204
     )
     assert dmc.remove_friend("token", "123") == (204, "")
-    mock_sleep.assert_called_once_with(0.5)
-
-
-# --- get_dms tests ---
-
-
-# --- Mass operations full tests (covering print branches) ---
-
-
+    mock_sleep.assert_any_call(0.5)
 
 
 # --- Mass operations full tests (covering print branches) ---
@@ -465,7 +457,6 @@ def test_mass_remove_friends_empty_selection(mock_get_friends, mock_input, capsy
     assert "Nothing selected." in capsys.readouterr().out
 
 
-
 # --- Main menu tests ---
 
 
@@ -613,8 +604,6 @@ def test_mass_remove_friends_runtime_err(mock_get, capsys):
     assert "Runtime error: Err" in capsys.readouterr().out
 
 
-
-
 @patch("builtins.input", side_effect=["all", "yes"])
 @patch("discord_mass_cleanup.get_guilds")
 @patch("discord_mass_cleanup.leave_guild", return_value=(403, "Cloudflare IP Ban"))
@@ -662,8 +651,6 @@ def test_main_keyboard_interrupt(mock_get_masked_input, capsys):
 
 
 def test_main_invalid_token_loop(capsys):
-    
-
     def get_masked_side_effect(*args, **kwargs):
         if not hasattr(get_masked_side_effect, "called"):
             get_masked_side_effect.called = True
@@ -701,7 +688,10 @@ def test_get_read_states(mock_ws):
                         "guilds": [
                             {
                                 "name": "Server 1",
-                                "channels": [{"id": "ch1", "last_message_id": "msg2"}, {"id": "ch3", "last_message_id": "msg3"}],
+                                "channels": [
+                                    {"id": "ch1", "last_message_id": "msg2"},
+                                    {"id": "ch3", "last_message_id": "msg3"}
+                                ],
                                 "threads": [{"id": "th1", "last_message_id": "msg4"}]
                             }
                         ],
@@ -732,13 +722,14 @@ def test_mass_read_notifications_success(mock_api, mock_get_states, mock_in, cap
     mock_api.return_value = mock_r
 
     dmc.mass_read_notifications("token")
-    
+
     captured = capsys.readouterr().out
     assert "Success! All 2 notifications have been marked as read." in captured
     mock_api.assert_called_once()
     args, kwargs = mock_api.call_args
     assert args[0] == "POST"
     assert args[1] == "/read-states/ack-bulk"
+
 
 @patch("builtins.input", return_value="yes")
 @patch("discord_mass_cleanup._get_read_states", return_value={})
@@ -758,226 +749,44 @@ def test_mass_read_notifications_cf_ban(mock_api, mock_get_states, mock_in, caps
         dmc._make_api_request("GET", "/users/@me/guilds", "token", max_retries=2)
 
 
-def test_get_clean_error_html():
-    r = MagicMock()
-    r.text = "<html>1015 Cloudflare block</html>"
-    assert dmc.get_clean_error(r) == "Cloudflare IP Ban (Error 1015)"
-    r.text = "<html>Some other error</html>"
-    assert dmc.get_clean_error(r) == "HTML Error Response (Likely Cloudflare block)"
+def test_request_coordinator_backoff_isolation():
+    """Verify that a shorter backoff or wait does not reset an active longer backoff."""
+    coordinator = dmc.RequestCoordinator(min_interval=0.0)
+    coordinator.reset()
+
+    # Set backoff until now + 0.3s
+    coordinator.backoff(0.3)
+    # Attempt shorter backoff
+    coordinator.backoff(0.05)
+
+    start = time.monotonic()
+    assert coordinator.wait()
+    elapsed = time.monotonic() - start
+    assert elapsed >= 0.25, f"Backoff was cleared prematurely! Elapsed: {elapsed:.3f}s"
 
 
-def test_get_clean_error_json():
-    r = MagicMock()
-    r.text = '{"message": "API Error"}'
-    r.json.return_value = {"message": "API Error"}
-    assert dmc.get_clean_error(r) == "API Error"
-
-    r.json.side_effect = ValueError("No JSON")
-    assert dmc.get_clean_error(r) == '{"message": "API Error"}'
-
-
-def test_check_token_success(mock_responses):
-    mock_responses.add(
-        responses.GET,
-        f"{BASE_URL}/users/@me",
-        json={"username": "test", "global_name": "Test"},
-        status=200,
+def test_sanitize_token_advanced():
+    """Test extended token regex matching: long signatures, MFA, and varied Authorization formats."""
+    # Standard token with long signature
+    long_token = (
+        "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe."
+        "1234567890abcdefghijklmnopqrstuvwxyz_ABCDEFGHIJKLMNOPQRSTUVWXYZ-1234"
     )
-    assert dmc.check_token("token") is True
+    assert dmc.sanitize_token(f"Token is {long_token}") == "Token is [REDACTED_TOKEN]"
 
+    # MFA token
+    mfa_token = "mfa." + "a" * 80
+    assert dmc.sanitize_token(f"MFA: {mfa_token}") == "MFA: [REDACTED_TOKEN]"
 
-def test_check_token_invalid(mock_responses):
-    mock_responses.add(responses.GET, f"{BASE_URL}/users/@me", status=401)
-    assert dmc.check_token("bad_token") is False
+    # Authorization header raw & json
+    raw_header = "Authorization: Bearer secret_token_value_123"
+    assert "[REDACTED_TOKEN]" in dmc.sanitize_token(raw_header)
 
+    json_header = '{"Authorization": "secret_token_123"}'
+    assert "[REDACTED_TOKEN]" in dmc.sanitize_token(json_header)
 
-def test_check_token_exception(mock_responses):
-    mock_responses.add(responses.GET, f"{BASE_URL}/users/@me", status=500)
-    assert dmc.check_token("token") is False
-
-
-@patch("discord_mass_cleanup.get_guilds", side_effect=RuntimeError("Err"))
-def test_mass_leave_servers_runtime_err(mock_get, capsys):
-    dmc.mass_leave_servers("token")
-    assert "Runtime error: Err" in capsys.readouterr().out
-
-
-@patch("discord_mass_cleanup.get_friends", side_effect=RuntimeError("Err"))
-def test_mass_remove_friends_runtime_err(mock_get, capsys):
-    dmc.mass_remove_friends("token")
-    assert "Runtime error: Err" in capsys.readouterr().out
-
-
-
-
-@patch("builtins.input", side_effect=["all", "yes"])
-@patch("discord_mass_cleanup.get_guilds")
-@patch("discord_mass_cleanup.leave_guild", return_value=(403, "Cloudflare IP Ban"))
-def test_mass_leave_servers_cloudflare_ban(mock_leave, mock_get, mock_in, capsys):
-    mock_get.return_value = [{"id": "1", "name": "Guild", "owner": False}]
-    dmc.mass_leave_servers("token")
-    assert "FATAL: Cloudflare has temporarily banned your IP" in capsys.readouterr().out
-
-
-@patch("builtins.input", side_effect=["all", "yes"])
-@patch("discord_mass_cleanup.get_guilds")
-@patch("discord_mass_cleanup.leave_guild", side_effect=Exception("General Error"))
-def test_mass_leave_servers_exception(mock_leave, mock_get, mock_in, capsys):
-    mock_get.return_value = [{"id": "1", "name": "Guild", "owner": False}]
-    dmc.mass_leave_servers("token")
-    assert "Error: General Error" in capsys.readouterr().out
-
-
-@patch("builtins.input", side_effect=["all", "yes"])
-@patch(
-    "discord_mass_cleanup.get_friends",
-    return_value=[{"id": "1", "user": {"username": "u1"}}],
-)
-@patch("discord_mass_cleanup.remove_friend", return_value=(403, "Cloudflare IP Ban"))
-def test_mass_remove_friends_cf_ban(mock_rm, mock_get, mock_in, capsys):
-    dmc.mass_remove_friends("token")
-    assert "FATAL: Cloudflare has temporarily banned your IP" in capsys.readouterr().out
-
-
-@patch("builtins.input", side_effect=["all", "yes"])
-@patch(
-    "discord_mass_cleanup.get_friends",
-    return_value=[{"id": "1", "user": {"username": "u1"}}],
-)
-@patch("discord_mass_cleanup.remove_friend", side_effect=Exception("GenErr"))
-def test_mass_remove_friends_exception(mock_rm, mock_get, mock_in, capsys):
-    dmc.mass_remove_friends("token")
-    assert "Error: GenErr" in capsys.readouterr().out
-
-
-@patch("discord_mass_cleanup.get_masked_input", side_effect=KeyboardInterrupt)
-def test_main_keyboard_interrupt(mock_get_masked_input, capsys):
-    dmc.main()
-    assert "Cancelled." in capsys.readouterr().out
-
-
-def test_main_invalid_token_loop(capsys):
-    
-
-    def get_masked_side_effect(*args, **kwargs):
-        if not hasattr(get_masked_side_effect, "called"):
-            get_masked_side_effect.called = True
-            return "bad_token"
-        raise KeyboardInterrupt()
-
-    with patch("discord_mass_cleanup.get_masked_input", side_effect=get_masked_side_effect):
-        with patch("discord_mass_cleanup.check_token", return_value=False):
-            try:
-                dmc.main()
-            except KeyboardInterrupt:
-                pass
-
-
-@patch("websocket.WebSocketApp")
-def test_get_read_states(mock_ws):
-    ws_instance = MagicMock()
-    mock_ws.return_value = ws_instance
-
-    def side_effect(*args, **kwargs):
-        on_open = kwargs["on_open"]
-        on_message = kwargs["on_message"]
-        on_error = kwargs["on_error"]
-        on_open(ws_instance)
-        on_message(ws_instance, json.dumps({"op": 9}))
-        on_message(
-            ws_instance,
-            json.dumps(
-                {
-                    "t": "READY",
-                    "d": {
-                        "read_state": {
-                            "entries": [{"id": "ch1", "last_message_id": "msg1"}]
-                        },
-                        "guilds": [
-                            {
-                                "name": "Server 1",
-                                "channels": [{"id": "ch1", "last_message_id": "msg2"}, {"id": "ch3", "last_message_id": "msg3"}],
-                                "threads": [{"id": "th1", "last_message_id": "msg4"}]
-                            }
-                        ],
-                        "private_channels": [
-                            {"id": "pc1", "last_message_id": "msg5"}
-                        ]
-                    },
-                }
-            ),
-        )
-        on_error(ws_instance, "some_error")
-        return ws_instance
-
-    mock_ws.side_effect = side_effect
-
-    res = dmc._get_read_states("token")
-    assert res == {"Server 1": ["ch1", "ch3", "th1"], "Direct Messages": ["pc1"]}
-    assert ws_instance.send.called
-    assert ws_instance.run_forever.called
-
-
-@patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup._get_read_states", return_value={"Server 1": ["ch1", "ch2"]})
-@patch("discord_mass_cleanup._make_api_request")
-def test_mass_read_notifications_success(mock_api, mock_get_states, mock_in, capsys):
-    mock_r = MagicMock()
-    mock_r.status_code = 200
-    mock_api.return_value = mock_r
-
-    dmc.mass_read_notifications("token")
-    
-    captured = capsys.readouterr().out
-    assert "Success! All 2 notifications have been marked as read." in captured
-    mock_api.assert_called_once()
-    args, kwargs = mock_api.call_args
-    assert args[0] == "POST"
-    assert args[1] == "/read-states/ack-bulk"
-
-@patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup._get_read_states", return_value={})
-def test_mass_read_notifications_empty(mock_get_states, mock_in, capsys):
-    dmc.mass_read_notifications("token")
-    assert "No channels found to mark as read." in capsys.readouterr().out
-
-
-@patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup._get_read_states", return_value={"Server 1": ["ch1"]})
-@patch("discord_mass_cleanup._make_api_request")
-def test_mass_read_notifications_cf_ban(mock_api, mock_get_states, mock_in, capsys):
-    mock_api.side_effect = RuntimeError("Cloudflare IP Ban")
-
-    dmc.mass_read_notifications("token")
-    
-    captured = capsys.readouterr().out
-    assert "FATAL: Cloudflare has temporarily banned your IP. Aborting." in captured
-
-
-@patch("builtins.input", return_value="yes")
-@patch("discord_mass_cleanup._get_read_states", return_value={"Server 1": ["ch1"]})
-@patch("discord_mass_cleanup._make_api_request", side_effect=dmc.NetworkError("NetErr"))
-def test_mass_read_notifications_net_err(mock_api, mock_get_states, mock_in, capsys):
-    dmc.mass_read_notifications("token")
-    
-    captured = capsys.readouterr().out
-    assert "Network error: NetErr" in captured
-
-
-def test_is_timeout_error_true():
-    assert dmc._is_timeout_error(requests.Timeout("request timed out")) is True
-
-
-def test_is_timeout_error_false():
-    assert dmc._is_timeout_error(requests.RequestException("connection error")) is False
-
-
-def test_make_api_request_non_timeout_error(mock_responses):
-    mock_responses.add(
-        responses.GET, f"{BASE_URL}/users/@me/guilds", body=requests.ConnectionError("Connection failed")
-    )
-    with pytest.raises(requests.RequestException, match="Connection failed"):
-        dmc._make_api_request("GET", "/users/@me/guilds", "token", max_retries=2)
+    url_token = "token=secret_token_value_here"
+    assert "[REDACTED_TOKEN]" in dmc.sanitize_token(url_token)
 
 
 @patch("builtins.input", side_effect=["all", "yes"])
@@ -1037,4 +846,3 @@ def test_mass_unblock_users_exception(mock_unblock, mock_get, mock_in, capsys):
     mock_get.return_value = [{"id": "1", "user": {"username": "spammer"}}]
     dmc.mass_unblock_users("token")
     assert "Error: UnblockErr" in capsys.readouterr().out
-
