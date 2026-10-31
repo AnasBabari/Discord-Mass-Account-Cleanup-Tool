@@ -287,3 +287,62 @@ class UsernameScanner:
         fn = getattr(self.client, "check_username_availability", None)
         if fn is None or hasattr(fn, "assert_called"):
             return False
+        try:
+            sig = inspect.signature(fn)
+            return "scan_id" in sig.parameters or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+        except (ValueError, TypeError):
+            return False
+
+    def _enforce_circuit_ready(self, account_id: str, route_url: str) -> None:
+        health = self.store.get_provider_health(account_id, route=route_url, now=self.clock())
+        if not health.is_circuit_open:
+            return
+        reason = health.reason or f"Provider circuit breaker is open ({health.state.label}). Reset health before retrying."
+        if health.state == ProviderHealthState.BLOCKED_CHALLENGE:
+            raise UpstreamBlockedError(reason)
+        if health.state == ProviderHealthState.UNINTERPRETABLE_RESPONSE:
+            raise InvalidPayloadError(reason)
+        raise NetworkError(reason)
+
+    def _dispatch_client_check(
+        self,
+        candidate: str,
+        *,
+        account_id: str,
+        scan_id: str,
+        cancel_event: threading.Event,
+        on_backoff: Callable[[float], None],
+        on_network_request: Callable[[], None],
+        can_dispatch_network: Callable[[], bool],
+        max_wait_deadline_mono: float | Callable[[], float | None] | None,
+    ) -> UsernameCheckResult:
+        provider = self._provider_name(account_id)
+        route_url = self._route_url(account_id)
+        self._enforce_circuit_ready(account_id, route_url)
+        if isinstance(self.client, PublicUsernameClient):
+            return self.client.check_username_availability(
+                candidate,
+                cancel_event=cancel_event,
+                on_backoff=on_backoff,
+                scan_id=scan_id,
+                use_cache=False,
+                force_recheck=True,
+                on_network_request=on_network_request,
+                can_dispatch_network=can_dispatch_network,
+                max_wait_deadline_mono=max_wait_deadline_mono,
+            )
+
+        if not can_dispatch_network():
+            raise RequestCancelledError("Network request budget reached before dispatch.")
+        req_start = self.clock()
+        req_start_iso = self._now_iso()
+        if self._supports_extended_kwargs():
+            result = self.client.check_username_availability(
+                candidate,
+                cancel_event=cancel_event,
+                on_backoff=on_backoff,
+                can_dispatch_network=can_dispatch_network,
+                on_network_request=on_network_request,
+            )
