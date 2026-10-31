@@ -108,3 +108,62 @@ class CacheFreshnessPolicy:
 
 
 VALID_STRATEGIES = ("exhaustive", "generated", "randomized", "priority", "watchlist")
+VALID_CHARSET_MODES = (
+    "all",
+    "letters",
+    "letters_only",
+    "alphanumeric",
+    "no_punctuation",
+    "no_periods",
+    "letters_digits_underscore",
+    "custom",
+)
+
+
+@dataclass(frozen=True)
+class CandidatePreferences:
+    strategy: str = "exhaustive"  # "exhaustive", "randomized", "priority", "watchlist"
+    charset_mode: str = "all"  # "all", "letters", "letters_only", "alphanumeric", "no_punctuation", "no_periods", "custom"
+    allowed_chars: str = ""
+    pattern: str = "any"  # "any", "pronounceable", "starts_with_letter", "no_edge_punctuation", "palindrome", or template
+    seed: int = 42
+    priority_names: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        if self.strategy not in VALID_STRATEGIES:
+            raise ValueError(f"Unknown candidate strategy: {self.strategy}")
+        if self.charset_mode not in VALID_CHARSET_MODES:
+            raise ValueError(f"Unknown character-set preference: {self.charset_mode}")
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int):
+            raise ValueError("Candidate seed must be an integer.")
+        if not isinstance(self.allowed_chars, str) or not isinstance(self.pattern, str):
+            raise ValueError("Candidate pattern and allowed_chars must be strings.")
+
+    def is_default_exhaustive(self) -> bool:
+        return (
+            self.strategy == "exhaustive"
+            and self.charset_mode == "all"
+            and not self.allowed_chars
+            and self.pattern == "any"
+            and not self.priority_names
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "strategy": self.strategy,
+            "charset_mode": self.charset_mode,
+            "allowed_chars": self.allowed_chars,
+            "pattern": self.pattern,
+            "seed": self.seed,
+            "priority_names": list(self.priority_names),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> CandidatePreferences:
+        if not data or not isinstance(data, dict):
+            return cls()
+        raw_priority = data.get("priority_names") or ()
+        raw_seed = data.get("seed", 42)
