@@ -110,3 +110,59 @@ class UsernamesPage(QWidget):
         layout.setContentsMargins(24, 16, 24, 16)
         layout.setSpacing(6)
         layout.addWidget(SectionHeader("fa5s.search", "Username Checker"))
+        note = QLabel(
+            "Check 3- and 4-character names directly with Discord. Public checks need no login. "
+            "Observations are cached safely with original check timestamps; claim names in Discord."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        settings = QHBoxLayout()
+        self.provider_input = QComboBox()
+        self.provider_input.setAccessibleName("Check source")
+        self.provider_input.addItem("Public · no login", "public")
+        self.provider_input.currentIndexChanged.connect(self.change_source)
+
+        self.mode_input = QComboBox()
+        self.mode_input.setAccessibleName("Search mode")
+        self.mode_input.addItem("Exhaustive search", "generated")
+        self.mode_input.addItem("Custom list", "custom")
+        self.mode_input.addItem("Watchlist", "watchlist")
+        self.mode_input.currentIndexChanged.connect(self.update_mode)
+
+        self.length_input = QComboBox()
+        self.length_input.setAccessibleName("Username length")
+        for label, lengths in (("3 + 4 characters", (3, 4)), ("3 characters", (3,)), ("4 characters", (4,))):
+            self.length_input.addItem(label, lengths)
+        self.length_input.currentIndexChanged.connect(self.update_estimate)
+
+        settings.addWidget(self.provider_input)
+        settings.addWidget(self.mode_input)
+        settings.addWidget(self.length_input)
+        layout.addLayout(settings)
+
+        # Row 2: Strategy, Charset, Pattern, Seed, Budget, Cache
+        strategy_row = QHBoxLayout()
+        self.strategy_input = QComboBox()
+        self.strategy_input.setAccessibleName("Candidate strategy")
+        for label, strat in (
+            ("Order: Exhaustive (a-z)", "exhaustive"),
+            ("Order: Randomized (seeded)", "randomized"),
+            ("Order: Priority heuristic", "priority"),
+        ):
+            self.strategy_input.addItem(label, strat)
+        self.strategy_input.currentIndexChanged.connect(self.update_estimate)
+
+        self.charset_input = QComboBox()
+        self.charset_input.setAccessibleName("Character set")
+        for label, cset in (
+            ("Chars: All allowed (a-z, 0-9, _ .)", "all"),
+            ("Chars: Letters only (a-z)", "letters"),
+            ("Chars: Alphanumeric (a-z, 0-9)", "alphanumeric"),
+            ("Chars: No punctuation", "no_punctuation"),
+        ):
+            self.charset_input.addItem(label, cset)
+        self.charset_input.currentIndexChanged.connect(self.update_estimate)
+
+        self.pattern_input = QComboBox()
+        self.pattern_input.setAccessibleName("Pattern preference")
