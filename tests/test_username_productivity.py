@@ -856,3 +856,5 @@ def test_sqlite_migration_on_copy_of_legacy_schema(tmp_path):
 
 def test_migration_runs_once_preserves_expires_at_and_handles_malformed_timestamps(tmp_path):
     db_file = tmp_path / "migration_edge.sqlite3"
+    with sqlite3.connect(db_file) as conn:
+        pass
