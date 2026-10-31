@@ -690,5 +690,62 @@ class PublicUsernameClient:
                             consecutive_rate_limits=self._consecutive_rate_limits,
                             retry_at=retry_deadline,
                         )
+                        self.store.record_diagnostic(
+                            provider="public",
+                            scope=self.scope,
+                            route=PUBLIC_USERNAME_ENDPOINT,
+                            username=username,
+                            classification="network_error",
+                            origin="network",
+                            scan_id=scan_id,
+                            started_at=req_start_iso,
+                            completed_at=req_end_iso,
+                            http_status=response.status_code,
+                            latency_ms=latency_ms,
+                            retry_at=retry_deadline,
+                            retry_reason="Network retry",
+                            wait_seconds=waited_s,
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                        )
+                        if total_consec < self.max_network_retries:
+                            if can_dispatch_network is not None and not can_dispatch_network():
+                                raise RequestCancelledError("Network request budget reached.")
+                            continue
+
+                    if response.status_code == 200 and isinstance(payload, dict) and type(payload.get("taken")) is bool:
+                        status = UsernameStatus.UNAVAILABLE if payload["taken"] else UsernameStatus.AVAILABLE
+                        self._consecutive_failures = 0
+                        self._consecutive_rate_limits = 0
+                        next_state = (
+                            ProviderHealthState.WAITING_COOLDOWN
+                            if (rl_meta.effective_delay > 0)
+                            else ProviderHealthState.READY
+                        )
+                        self.store.save_provider_health(
+                            self.scope,
+                            next_state,
+                            rl_meta.reason if rl_meta.effective_delay > 0 else "",
+                            consecutive_failures=0,
+                            consecutive_rate_limits=0,
+                            retry_at=active_deadline if rl_meta.effective_delay > 0 else 0.0,
+                        )
+                        obs_clock = self.clock()
+                        obs_time = format_utc_timestamp(obs_clock) if self._uses_custom_clock else utc_now()
+                        raw_result = UsernameCheckResult(
+                            username,
+                            status,
+                            obs_time,
+                            origin=ObservationOrigin.NETWORK.value,
+                            provider="public",
+                            observed_epoch=obs_clock,
+                        )
+                        cached_result = self.store.save_cached_observation(
+                            raw_result,
+                            provider="public",
+                            scope=self.scope,
+                            policy=self.freshness_policy,
+                            now=obs_clock,
+                        )
             except Timeout:
                 pass
