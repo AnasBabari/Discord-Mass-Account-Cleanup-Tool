@@ -880,3 +880,62 @@ class UsernameScanStore:
                     new_int_end,
                 ),
             )
+
+    def recent_diagnostics(self, scope: str = PUBLIC_USERNAME_SCOPE, limit: int = 50) -> list[RequestDiagnosticEntry]:
+        safe_limit = max(1, min(int(limit), self.max_diagnostics_rows))
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM request_diagnostics WHERE scope=? ORDER BY id DESC LIMIT ?",
+                (scope, safe_limit),
+            ).fetchall()
+        return [
+            RequestDiagnosticEntry(
+                id=int(row["id"]),
+                scan_id=str(row["scan_id"]),
+                provider=str(row["provider"]),
+                scope=str(row["scope"]),
+                route=str(row["route"]),
+                username=str(row["username"]),
+                started_at=str(row["started_at"]),
+                completed_at=str(row["completed_at"]),
+                http_status=int(row["http_status"]),
+                latency_ms=float(row["latency_ms"]),
+                classification=str(row["classification"]),
+                origin=str(row["origin"]),
+                ratelimit_limit=int(row["ratelimit_limit"]) if row["ratelimit_limit"] is not None else None,
+                ratelimit_remaining=float(row["ratelimit_remaining"])
+                if row["ratelimit_remaining"] is not None
+                else None,
+                ratelimit_reset_after=float(row["ratelimit_reset_after"])
+                if row["ratelimit_reset_after"] is not None
+                else None,
+                ratelimit_bucket=str(row["ratelimit_bucket"]),
+                ratelimit_scope=str(row["ratelimit_scope"]),
+                ratelimit_global=bool(row["ratelimit_global"]),
+                retry_at=float(row["retry_at"]),
+                retry_reason=str(row["retry_reason"]),
+                wait_seconds=float(row["wait_seconds"]),
+                consecutive_failures=int(row["consecutive_failures"]),
+                consecutive_rate_limits=int(row["consecutive_rate_limits"]),
+            )
+            for row in rows
+        ]
+
+    def diagnostics_summary(
+        self,
+        scope: str = PUBLIC_USERNAME_SCOPE,
+        *,
+        remaining_candidates: int = 0,
+        route: str = "",
+        now: float | None = None,
+    ) -> DiagnosticsSummary:
+        current_now = float(self.clock()) if now is None else float(now)
+        with self._connect() as connection:
+            counter = connection.execute(
+                "SELECT * FROM diagnostics_counters WHERE scope=?", (scope,)
+            ).fetchone()
+            recent_rows = connection.execute(
+                "SELECT classification, origin, http_status, consecutive_failures, consecutive_rate_limits "
+                "FROM request_diagnostics WHERE scope=? ORDER BY id DESC LIMIT 50",
+                (scope,),
+            ).fetchall()
