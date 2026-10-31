@@ -113,3 +113,62 @@ def test_shared_check_retry_transfers_budget_from_consumer_a_to_consumer_b(tmp_p
 
     scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
     scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(
+            scanner_a.run,
+            scan_a.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_network_requests=1),
+        )
+        time.sleep(0.03)
+        fut_b = pool.submit(
+            scanner_b.run,
+            scan_b.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_network_requests=5),
+        )
+        time.sleep(0.03)
+        both_joined.set()
+        res_a = fut_a.result(timeout=3.0)
+        res_b = fut_b.result(timeout=3.0)
+
+    assert attempt_count == 2
+    assert res_a.status == "completed"
+    assert res_b.status == "completed"
+    assert res_a.available == 1
+    assert res_b.available == 1
+    # Attempt 1 was reserved & committed on Consumer A (reaching its max_network_requests=1);
+    # Attempt 2 was transferred atomically to Consumer B (1/5 used).
+    assert res_a.network_checks == 1
+    assert res_b.network_checks == 1
+    # Consumer B committed the winning HTTP 200 attempt; Consumer A received the deduplicated outcome.
+    assert res_b.deduplicated_hits == 0
+    assert res_a.deduplicated_hits == 1
+
+    diag = store.diagnostics_summary(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL)
+    assert diag.network_requests_total == 2
+    assert res_a.network_checks + res_b.network_checks == diag.network_requests_total
+
+
+def test_consumer_a_cancels_between_reservation_and_dispatch_transfers_to_consumer_b(tmp_path: Path) -> None:
+    """If Consumer A cancels after budget reservation before commit, A's reservation rolls back and B is charged."""
+    store = UsernameScanStore(tmp_path / "cancel_transfer.db")
+    b_joined = threading.Event()
+    cancel_a = threading.Event()
+
+    def hook_cancel_a() -> None:
+        # Wait until Consumer B has joined the in-flight entry, then cancel Consumer A right before commit!
+        b_joined.wait(timeout=2.0)
+        cancel_a.set()
+
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(status_code=200, json_data={"taken": False})
+
+    client_a = PublicUsernameClient(store, transport=transport, min_interval=0.0, safety_margin=0.0, jitter=0.0)
+    client_b = PublicUsernameClient(store, transport=transport, min_interval=0.0, safety_margin=0.0, jitter=0.0)
+    scanner_a = UsernameScanner(store, client_a, before_commit_hook=hook_cancel_a)
+    scanner_b = UsernameScanner(store, client_b)
+
+    scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
