@@ -603,3 +603,58 @@ class UsernameScanner:
                             raise RequestCancelledError("Active duration budget reached.")
                         raise RequestCancelledError("Network request budget reached before dispatch.")
                     continue
+
+            if entry.cross_process_dedup:
+                is_dedup = True
+            elif entry.total_attempts_committed > 0:
+                is_dedup = entry.last_committer_slot is not slot
+            else:
+                is_dedup = not is_leader
+
+            if is_dedup:
+                now_iso = self._now_iso()
+                dedup_res = UsernameCheckResult(
+                    username=res.username,
+                    status=res.status,
+                    checked_at=res.checked_at,
+                    message=res.message,
+                    origin=ObservationOrigin.CACHE.value,
+                    provider=res.provider or provider,
+                    expires_at=res.expires_at,
+                    reused_at=now_iso,
+                    observed_epoch=res.observed_epoch,
+                    expires_epoch=res.expires_epoch,
+                    _clock=self.clock,
+                )
+                self.store.record_diagnostic(
+                    provider=provider,
+                    scope=account_id,
+                    route=route,
+                    username=normalized,
+                    classification="deduplicated",
+                    origin="dedup",
+                    scan_id=scan_id,
+                    started_at=now_iso,
+                    completed_at=now_iso,
+                )
+                return dedup_res, True, slot.attempts_committed
+
+            return res, False, slot.attempts_committed
+
+    def run(
+        self,
+        scan_id: str,
+        account_id: str,
+        cancel_event: threading.Event | None = None,
+        on_progress: Callable[[UsernameProgress], None] | None = None,
+        max_checks: int | None = None,
+        *,
+        budget: RequestBudget | None = None,
+        use_cache: bool | None = None,
+        force_recheck: bool = False,
+        before_commit_hook: Callable[[], None] | None = None,
+    ) -> UsernameScan:
+        if max_checks is not None and max_checks < 1:
+            raise ValueError("The check limit must be positive.")
+        if budget is not None:
+            budget.validate()
