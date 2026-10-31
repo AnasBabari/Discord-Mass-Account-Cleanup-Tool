@@ -223,3 +223,57 @@ class PublicUsernameClient:
     def clear_token(self) -> None:
         # Kept compatible with the existing worker lifecycle; public checks never receive a token.
         self.token = ""
+
+    def close(self) -> None:
+        self.transport.close()
+
+    def _cancel_if_needed(self, event: threading.Event) -> None:
+        if event.is_set():
+            raise RequestCancelledError("Public username check paused. Progress and cooldown are saved.")
+
+    def _record_deadline(
+        self,
+        delay: float,
+        reason: str,
+        *,
+        bucket: str = "",
+        is_global: bool = False,
+    ) -> float:
+        safe_delay = max(0.0, float(delay)) if math.isfinite(delay) else 60.0
+        now_utc = self.clock()
+        deadline_utc = now_utc + safe_delay
+        self.store.save_cooldown(
+            self.url,
+            deadline_utc,
+            reason,
+            scope=self.scope,
+            bucket=bucket,
+            is_global=is_global,
+        )
+        if not self._uses_custom_clock:
+            now_mono = self.monotonic()
+            prev_utc, prev_mono = self._mono_deadlines.get(self.url, (0.0, 0.0))
+            target_mono = max(prev_mono, now_mono + safe_delay)
+            self._mono_deadlines[self.url] = (max(prev_utc, deadline_utc), target_mono)
+        return deadline_utc
+
+    def _remaining_cooldown(self) -> tuple[float, str, float]:
+        deadline, reason = self.store.cooldown(self.url, scope=self.scope)
+        now_utc = self.clock()
+        utc_remaining = deadline - now_utc
+        if not self._uses_custom_clock:
+            now_mono = self.monotonic()
+            if self.url in self._mono_deadlines:
+                tracked_utc, tracked_mono = self._mono_deadlines[self.url]
+                if deadline > tracked_utc + 0.5:
+                    # Another process extended the SQLite deadline; adopt and protect it monotonically
+                    new_mono = max(tracked_mono, now_mono + max(0.0, utc_remaining))
+                    self._mono_deadlines[self.url] = (deadline, new_mono)
+                    return max(utc_remaining, new_mono - now_mono), reason, deadline
+                if abs(tracked_utc - deadline) <= 0.5:
+                    mono_remaining = tracked_mono - now_mono
+                    # Guard against forward wall-clock jumps shortening an active wait
+                    return max(utc_remaining, mono_remaining), reason, deadline
+            elif utc_remaining > 0:
+                self._mono_deadlines[self.url] = (deadline, now_mono + utc_remaining)
+        return utc_remaining, reason, deadline
