@@ -16,6 +16,8 @@ a = Analysis(
         'keyring.backends.macOS',
         'qtawesome',
         'websocket',
+        'platformdirs',
+        'filelock',
     ],
     hookspath=[],
     hooksconfig={},
