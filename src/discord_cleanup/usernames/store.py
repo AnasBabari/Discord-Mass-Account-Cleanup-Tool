@@ -763,3 +763,62 @@ class UsernameScanStore:
         is_dedup = int(origin == "dedup" or classification == "deduplicated")
         is_local_invalid = int(origin == "local" and classification == "invalid")
         is_net_req = int(origin == "network")
+        is_rl = int(http_status == 429 or classification == "rate_limited")
+        is_err = int(classification in ("network_error", "blocked_challenge", "uninterpretable"))
+        req_span = (safe_latency / 1000.0) + safe_wait
+
+        end_ep = parse_utc_timestamp(end_ts)
+        start_ep = parse_utc_timestamp(start_ts)
+        if end_ep is None:
+            end_ep = float(self.clock())
+        if start_ep is None:
+            start_ep = end_ep - req_span
+        else:
+            start_ep = min(start_ep, end_ep - req_span)
+        end_ep = max(end_ep, start_ep + req_span)
+
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO request_diagnostics ("
+                "scan_id, provider, scope, route, username, started_at, completed_at, http_status, latency_ms, "
+                "classification, origin, ratelimit_limit, ratelimit_remaining, ratelimit_reset_after, "
+                "ratelimit_bucket, ratelimit_scope, ratelimit_global, retry_at, retry_reason, wait_seconds, "
+                "consecutive_failures, consecutive_rate_limits"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    scan_id,
+                    provider,
+                    scope,
+                    safe_route,
+                    safe_username,
+                    start_ts,
+                    end_ts,
+                    int(http_status),
+                    safe_latency,
+                    classification,
+                    origin,
+                    ratelimit_limit,
+                    ratelimit_remaining,
+                    ratelimit_reset_after,
+                    safe_bucket,
+                    safe_rl_scope,
+                    int(bool(ratelimit_global)),
+                    safe_retry_at,
+                    safe_reason,
+                    safe_wait,
+                    max(0, int(consecutive_failures)),
+                    max(0, int(consecutive_rate_limits)),
+                ),
+            )
+            connection.execute(
+                "DELETE FROM request_diagnostics WHERE id <= ("
+                "SELECT id FROM request_diagnostics ORDER BY id DESC LIMIT 1 OFFSET ?"
+                ")",
+                (self.max_diagnostics_rows,),
+            )
+
+            existing = connection.execute(
+                "SELECT active_duration_seconds, last_interval_start, last_interval_end "
+                "FROM diagnostics_counters WHERE scope=?",
+                (scope,),
+            ).fetchone()
