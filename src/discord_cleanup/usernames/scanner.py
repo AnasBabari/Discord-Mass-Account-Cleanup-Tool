@@ -393,3 +393,59 @@ class UsernameScanner:
             return False
         now_m = self.clock() if self._uses_custom_clock else self.monotonic()
         return now_m >= max_wait_deadline_mono
+
+    def _check_with_cache_and_dedup(
+        self,
+        candidate: str,
+        *,
+        account_id: str,
+        scan_id: str,
+        cancel_event: threading.Event,
+        on_backoff: Callable[[float], None],
+        can_dispatch_network: Callable[[], bool],
+        try_reserve_network: Callable[[], bool],
+        release_reserved_network: Callable[[], None],
+        commit_reserved_network: Callable[[], None],
+        max_wait_deadline_mono: float | None,
+        use_cache: bool,
+        force_recheck: bool,
+        before_commit_hook: Callable[[], None] | None = None,
+    ) -> tuple[UsernameCheckResult, bool, int]:
+        """Return (UsernameCheckResult, deduplicated_flag, attempts_committed_by_slot)."""
+        provider = self._provider_name(account_id)
+        route = PUBLIC_USERNAME_ENDPOINT if provider == "public" else "/users/@me/pomelo-attempt"
+        normalized = candidate.lower()
+        request_started_epoch = self.clock()
+
+        if use_cache and not force_recheck:
+            cached = self.store.get_cached_observation(
+                normalized, provider=provider, scope=account_id, now=self.clock()
+            )
+            if cached is not None:
+                now_iso = self._now_iso()
+                self.store.record_diagnostic(
+                    provider=provider,
+                    scope=account_id,
+                    route=route,
+                    username=normalized,
+                    classification=cached.status.value,
+                    origin="cache",
+                    scan_id=scan_id,
+                    started_at=now_iso,
+                    completed_at=now_iso,
+                )
+                return cached, False, 0
+
+        if not can_dispatch_network():
+            if cancel_event.is_set():
+                raise RequestCancelledError("Username check cancelled before dispatch.")
+            if self._is_deadline_expired(max_wait_deadline_mono):
+                raise RequestCancelledError("Active duration budget reached before dispatch.")
+            raise RequestCancelledError("Network request budget reached before dispatch.")
+
+        inflight_key = (str(self.store.path), provider, account_id, normalized)
+
+        while True:
+            consumer_cancel = threading.Event()
+            if cancel_event.is_set():
+                consumer_cancel.set()
