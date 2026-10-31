@@ -159,6 +159,65 @@ class DiscordApiClient:
 
         raise RateLimitExceededError(f"Max retries ({self.max_retries}) exceeded for {method} {endpoint}")
 
+    def check_username_availability(
+        self,
+        username: str,
+        cancel_event: threading.Event | None = None,
+        on_backoff: Callable[[float], None] | None = None,
+        *,
+        can_dispatch_network: Callable[[], bool] | None = None,
+        on_network_request: Callable[[], None] | None = None,
+        **_kwargs: Any,
+    ) -> UsernameCheckResult:
+        """Check a name without claiming it. This user endpoint is undocumented by Discord."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise RequestCancelledError("Username check cancelled.")
+        from discord_cleanup.usernames.candidates import validate_username
+
+        validation_error = validate_username(username)
+        if validation_error:
+            return UsernameCheckResult(
+                username,
+                UsernameStatus.INVALID,
+                utc_now(),
+                validation_error,
+                origin=ObservationOrigin.LOCAL.value,
+                provider="account",
+            )
+        expected_url = f"{self.base_url}/users/@me/pomelo-attempt"
+        response = self.request(
+            "POST",
+            "/users/@me/pomelo-attempt",
+            json_data={"username": username},
+            cancel_event=cancel_event,
+            on_backoff=on_backoff,
+            allow_redirects=False,
+            can_dispatch_network=can_dispatch_network,
+            on_network_request=on_network_request,
+        )
+        final_url = getattr(response, "url", expected_url)
+        raw_headers = getattr(response, "headers", None) or {}
+        headers_lower = {str(k).lower(): str(v) for k, v in raw_headers.items()}
+        if (
+            (300 <= response.status_code < 400)
+            or headers_lower.get("location")
+            or (isinstance(final_url, str) and final_url.rstrip("/") != expected_url.rstrip("/"))
+        ):
+            raise InvalidPayloadError("Discord redirected the username check. Availability is unverified.")
+        if response.status_code == 401:
+            raise AuthenticationError("Discord login expired. Sign in again to resume the scan.")
+        if response.status_code == 403 or "<html" in response.text.lower():
+            raise UpstreamBlockedError("Discord blocked the username check. The scan has been paused.")
+        try:
+            data = response.json()
+        except (ValueError, TypeError) as exc:
+            raise InvalidPayloadError("Discord returned a non-JSON username response.") from exc
+        if not isinstance(data, dict):
+            raise InvalidPayloadError("Discord returned an unexpected username response.")
+        if any(key.startswith("captcha_") for key in data):
+            raise UpstreamBlockedError("Discord requires a verification challenge. The scan has been paused.")
+        if response.status_code == 200 and type(data.get("taken")) is bool:
+            status = UsernameStatus.UNAVAILABLE if data["taken"] else UsernameStatus.AVAILABLE
     def verify_token(self, token: str | None = None, cancel_event: threading.Event | None = None) -> User:
         """Verify authentication token against /users/@me and return authenticated User domain model."""
         response = self.request("GET", "/users/@me", token=token, cancel_event=cancel_event)
