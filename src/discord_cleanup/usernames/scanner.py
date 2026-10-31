@@ -346,3 +346,50 @@ class UsernameScanner:
                 can_dispatch_network=can_dispatch_network,
                 on_network_request=on_network_request,
             )
+        else:
+            on_network_request()
+            result = self.client.check_username_availability(
+                candidate,
+                cancel_event=cancel_event,
+                on_backoff=on_backoff,
+            )
+        req_end_clock = self.clock()
+        latency_ms = max(0.0, (req_end_clock - req_start) * 1000.0)
+        req_end_iso = self._now_iso()
+        if result.status in (UsernameStatus.AVAILABLE, UsernameStatus.UNAVAILABLE, UsernameStatus.INVALID):
+            result_with_epoch = replace(result, observed_epoch=req_end_clock)
+            result = self.store.save_cached_observation(
+                result_with_epoch,
+                provider=provider,
+                scope=account_id,
+                policy=self.freshness_policy,
+                now=req_end_clock,
+            )
+            self.store.save_provider_health(
+                account_id,
+                ProviderHealthState.READY,
+                "",
+                consecutive_failures=0,
+                consecutive_rate_limits=0,
+                now=req_end_clock,
+            )
+            self.store.record_diagnostic(
+                provider=provider,
+                scope=account_id,
+                route="/users/@me/pomelo-attempt",
+                username=candidate,
+                classification=result.status.value,
+                origin="network",
+                scan_id=scan_id,
+                started_at=req_start_iso,
+                completed_at=req_end_iso,
+                http_status=200 if result.status != UsernameStatus.INVALID else 400,
+                latency_ms=latency_ms,
+            )
+        return result
+
+    def _is_deadline_expired(self, max_wait_deadline_mono: float | None) -> bool:
+        if max_wait_deadline_mono is None:
+            return False
+        now_m = self.clock() if self._uses_custom_clock else self.monotonic()
+        return now_m >= max_wait_deadline_mono
