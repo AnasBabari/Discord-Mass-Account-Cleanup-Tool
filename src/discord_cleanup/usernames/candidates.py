@@ -291,3 +291,62 @@ def _template_char_matches(char: str, spec: str) -> bool:
         return "0" <= char <= "9"
     if spec == "V":
         return char in VOWELS
+    if spec == "C":
+        return char in CONSONANTS
+    return char == spec.lower()
+
+
+def _count_domain_matches_for_length(length: int, alphabet: str, pattern: str) -> int:
+    """Compute the exact number of valid strings of `length` over `alphabet` matching `pattern` in O(length * |alphabet|)."""
+    alpha_set = set(alphabet)
+    if not alpha_set:
+        return 0
+    cleaned = (pattern or "any").strip()
+    if cleaned in ("", "any"):
+        return _count_position_constrained([alpha_set] * length)
+
+    if cleaned == "starts_with_letter":
+        first = {c for c in alpha_set if "a" <= c <= "z"}
+        return _count_position_constrained([first] + [alpha_set] * (length - 1))
+
+    if cleaned == "no_edge_punctuation":
+        edge = {c for c in alpha_set if c not in "_."}
+        if length <= 1:
+            return _count_position_constrained([edge] * length)
+        return _count_position_constrained([edge] + [alpha_set] * (length - 2) + [edge])
+
+    if cleaned == "pronounceable":
+        v_set = {c for c in alpha_set if c in VOWELS}
+        c_set = {c for c in alpha_set if c in CONSONANTS}
+        nv, nc = len(v_set), len(c_set)
+        if length == 3:
+            # Disjoint shapes: CVC and VCV
+            return (nc * nv * nc) + (nv * nc * nv)
+        if length == 4:
+            # Disjoint shapes: CVCV, VCVC, CVCC, CCVC
+            return (nc * nv * nc * nv) + (nv * nc * nv * nc) + (nc * nv * nc * nc) + (nc * nc * nv * nc)
+        return 0
+
+    if cleaned == "palindrome":
+        # For length 3 and 4, `name == name[::-1]` implies `len(set(name)) <= 2`.
+        # Thus `name == name[::-1] or len(set(name)) <= 2` is equivalent to `len(set(name)) <= 2` with no '..'.
+        has_dot = "." in alpha_set
+        non_dot = len(alpha_set) - (1 if has_dot else 0)
+        if non_dot <= 0:
+            return 0
+        # 1 distinct character (cannot be '.' since length >= 3)
+        one_char = non_dot
+        # 2 distinct non-dot characters: C(non_dot, 2) * (2^length - 2)
+        two_non_dot = (non_dot * (non_dot - 1) // 2) * ((1 << length) - 2)
+        # 2 distinct characters where one is '.' and one is non-dot:
+        # Fib strings of length L over {x, '.'} with no '..' and at least one '.' and one x:
+        # For L=3: .x., x.x, .xx, xx. -> 4; for L=4: 8 total Fib - 1 (xxxx) = 7
+        dot_patterns = 4 if length == 3 else (7 if length == 4 else 0)
+        two_with_dot = (non_dot * dot_patterns) if has_dot else 0
+        return one_char + two_non_dot + two_with_dot
+
+    templates = [t.strip() for t in cleaned.split(",") if t.strip()]
+    if not templates:
+        return _count_position_constrained([alpha_set] * length)
+
+    matching_templates = [t for t in templates if len(t) == length]
