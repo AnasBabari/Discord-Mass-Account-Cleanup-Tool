@@ -168,3 +168,62 @@ class _InFlightEntry:
                 cb(seconds)
             except Exception:
                 pass
+
+    def can_any_active_waiter_dispatch(self) -> bool:
+        with self.lock:
+            self._sync_shared_cancel_unlocked()
+            for slot in self.slots:
+                if slot.is_active() and slot.can_dispatch_fn():
+                    return True
+            return False
+
+    def reserve_and_commit_attempt(self) -> None:
+        """Atomically select an eligible active consumer, reserve its budget, verify liveness, and commit."""
+        with self.lock:
+            self._sync_shared_cancel_unlocked()
+            for slot in list(self.slots):
+                if not slot.is_active():
+                    continue
+                if not slot.try_reserve_fn():
+                    continue
+                try:
+                    if slot.before_commit_hook is not None:
+                        slot.before_commit_hook()
+                except BaseException:
+                    slot.release_reserved_fn()
+                    self._sync_shared_cancel_unlocked()
+                    raise
+                if not slot.is_active():
+                    # Cancelled or expired between reservation and dispatch: roll back reservation and transfer!
+                    slot.release_reserved_fn()
+                    self._sync_shared_cancel_unlocked()
+                    continue
+                slot.commit_reserved_fn()
+                slot.attempts_committed += 1
+                self.total_attempts_committed += 1
+                self.last_committer_slot = slot
+                return
+            self._sync_shared_cancel_unlocked()
+            if self.shared_cancel.is_set():
+                raise RequestCancelledError("Username check cancelled before dispatch.")
+            raise RequestCancelledError("Network request budget reached before dispatch.")
+
+    def _sync_shared_cancel_unlocked(self) -> None:
+        active = [s for s in self.slots if s.is_active()]
+        if not active:
+            self.shared_cancel.set()
+        else:
+            self.shared_cancel.clear()
+
+
+_INFLIGHT_MUTEX = threading.Lock()
+_INFLIGHT_MAP: dict[tuple[str, str, str, str], _InFlightEntry] = {}
+_ACTIVE_SHARED_THREADS: set[threading.Thread] = set()
+
+
+def wait_for_active_shared_requests(timeout: float = 2.0) -> bool:
+    """Wait up to `timeout` seconds for any background shared-request worker threads to finish."""
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        with _INFLIGHT_MUTEX:
+            threads = list(_ACTIVE_SHARED_THREADS)
