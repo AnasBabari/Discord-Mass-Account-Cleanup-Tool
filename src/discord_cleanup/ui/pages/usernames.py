@@ -643,3 +643,63 @@ class UsernamesPage(QWidget):
         sel_model = self.table.selectionModel()
         for idx in sel_model.selectedRows() if sel_model is not None else []:
             item = self.table.item(idx.row(), 0)
+            if item is not None and item.text():
+                selected.append(item.text().strip().lower())
+        return selected
+
+    def recheck_selected(self) -> None:
+        names = self._selected_table_usernames()
+        if not names:
+            names = parse_custom_names(self.custom_input.toPlainText())
+        if not names and self.scan is not None and self.account_id:
+            rows, _ = self.store().results(
+                self.scan.id, self.account_id, available_only=True, offset=0, limit=25, now=self.clock()
+            )
+            names = [r.username for r in rows]
+        if not names:
+            self.status_label.setText("Select rows in the table or enter custom names to run a fresh recheck.")
+            return
+        self._launch("recheck", force_recheck=True, recheck_names=names)
+
+    def add_selected_to_watchlist(self) -> None:
+        scope = self._active_scope() or PUBLIC_USERNAME_SCOPE
+        names = self._selected_table_usernames() or parse_custom_names(self.custom_input.toPlainText())
+        if not names:
+            self.status_label.setText("Select rows in the table or paste custom names to add to the watchlist.")
+            return
+        try:
+            added = self.store().add_watchlist(scope, names)
+            total = len(self.store().list_watchlist(scope))
+            self.status_label.setText(f"Added {len(added):,} username(s) to watchlist ({total:,} total saved).")
+            self.update_estimate()
+        except Exception as exc:
+            self.on_error(str(exc))
+
+    def reset_provider_health(self) -> None:
+        scope = self._active_scope() or PUBLIC_USERNAME_SCOPE
+        route = PUBLIC_CHECK_URL if scope == PUBLIC_USERNAME_SCOPE else "/users/@me/pomelo-attempt"
+        try:
+            health = self.store().reset_provider_health(scope, route=route, now=self.clock())
+            self._last_health = health
+            self._refresh_metrics_label()
+            if health.state == ProviderHealthState.WAITING_COOLDOWN:
+                self.status_label.setText("Circuit breaker cleared; active server cooldown remains enforced.")
+            else:
+                self.status_label.setText("Provider health reset to Ready. Active server cooldowns are preserved.")
+        except Exception as exc:
+            self.on_error(str(exc))
+
+    def show_diagnostics_dialog(self) -> None:
+        scope = self._active_scope() or PUBLIC_USERNAME_SCOPE
+        route = PUBLIC_CHECK_URL if scope == PUBLIC_USERNAME_SCOPE else "/users/@me/pomelo-attempt"
+        remaining_cands = max(0, self.scan.total - self.scan.checked) if self.scan else 0
+        try:
+            summary = self.store().diagnostics_summary(
+                scope, remaining_candidates=remaining_cands, route=route, now=self.clock()
+            )
+            recent = self.store().recent_diagnostics(scope, limit=25)
+        except Exception as exc:
+            self.on_error(str(exc))
+            return
+
+        dialog = QDialog(self)
