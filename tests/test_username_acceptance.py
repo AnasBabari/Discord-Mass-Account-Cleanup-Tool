@@ -641,3 +641,61 @@ def test_desktop_ui_live_freshness_transitions_idle_paused_waiting_and_page_swit
     assert statuses_fresh == {"cat": "available", "dog": "unavailable"}
 
     # Verify idle timer ticks before expiry (t=10200 < 10300) do NOT re-query SQLite results
+    with monkeypatch.context() as m:
+        results_spy = MagicMock(wraps=page.store().results)
+        m.setattr(page.store(), "results", results_spy)
+        clock.now = 10_200.0
+        for _ in range(5):
+            page.update_cooldown()
+        assert results_spy.call_count == 0
+
+    # 2. Advance clock past "cat"'s expiry (t=10305 >= 10300) while idle and trigger timer tick
+    clock.now = 10_305.0
+    page.update_cooldown()
+    assert transport.request.call_count == 2  # Zero network requests triggered by UI refresh!
+    assert "1 available (0 fresh, 1 historical)" in page.status_label.text()
+    statuses_after = {page.table.item(r, 0).text(): page.table.item(r, 1).text() for r in range(page.table.rowCount())}
+    details_after = {page.table.item(r, 0).text(): page.table.item(r, 3).text() for r in range(page.table.rowCount())}
+    assert statuses_after["cat"] == "available (historical)"
+    assert "historical" in details_after["cat"]
+    assert statuses_after["dog"] == "unavailable"  # TTL 3600s -> still fresh at t=10305!
+
+    # 3. Switch filter to "Available (fresh only)": expired "cat" is excluded
+    page.filter_input.setCurrentIndex(2)  # Available (fresh only)
+    assert page.table.rowCount() == 0
+    assert page.page_label.text() == "0–0 of 0 results"
+
+    # Copy Available under "Available (fresh only)" copies empty string
+    page.copy_available()
+    qtbot.waitUntil(lambda: page.results_worker is not None and not page.results_worker.isRunning(), timeout=2000)
+
+    # Switch to "Available names" (includes historical): "cat" is shown as "available (historical)"
+    page.filter_input.setCurrentIndex(0)
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "cat"
+    assert page.table.item(0, 1).text() == "available (historical)"
+
+    # Export CSV reflects historical freshness without any network traffic
+    csv_out = tmp_path / "ui_expired_export.csv"
+    page._prepare_results(str(csv_out))
+    qtbot.waitUntil(lambda: page.results_worker is not None and not page.results_worker.isRunning(), timeout=2000)
+    with csv_out.open(newline="", encoding="utf-8") as f:
+        exported = {r["username"]: r for r in csv.DictReader(f)}
+    assert exported["cat"]["freshness"] == "historical"
+    assert exported["dog"]["freshness"] == "fresh"
+
+    # 4. Page switch (`showEvent`) refresh test: advance past "dog"'s expiry (t=13700) while hidden, then show
+    page.filter_input.setCurrentIndex(1)  # All results
+    page.hide()
+    clock.now = 13_700.0
+    page.show()
+    statuses_page_switch = {
+        page.table.item(r, 0).text(): page.table.item(r, 1).text() for r in range(page.table.rowCount())
+    }
+    assert statuses_page_switch["dog"] == "unavailable (historical)"
+    assert transport.request.call_count == 2
+
+
+# ===========================================================================
+# Section 6: Genuine Multi-Process Integration Tests
+# ===========================================================================
