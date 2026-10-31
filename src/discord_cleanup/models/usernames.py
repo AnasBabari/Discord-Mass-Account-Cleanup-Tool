@@ -464,3 +464,62 @@ class UsernameCheckResult:
     @property
     def is_stale(self) -> bool:
         return self.is_expired()
+
+    @property
+    def is_definitive(self) -> bool:
+        return self.status in (UsernameStatus.AVAILABLE, UsernameStatus.UNAVAILABLE)
+
+    @property
+    def display_status(self) -> _CallableString:
+        if self.status == UsernameStatus.ERROR:
+            return _CallableString("unverified")
+        if self.status == UsernameStatus.INVALID:
+            return _CallableString("invalid")
+        if self.is_stale:
+            return _CallableString(f"{self.status.value} (historical)")
+        if self.is_cached:
+            return _CallableString(f"{self.status.value} (cached)")
+        return _CallableString(self.status.value)
+
+    @property
+    def provenance_label(self) -> _CallableString:
+        if self.status == UsernameStatus.ERROR:
+            return _CallableString("unverified")
+        if self.status == UsernameStatus.INVALID and self.origin == ObservationOrigin.LOCAL.value:
+            return _CallableString("local_validation")
+        if self.is_stale:
+            return _CallableString("historical")
+        if self.is_cached:
+            return _CallableString("cached")
+        return _CallableString("network")
+
+
+@dataclass(frozen=True)
+class UsernameScan:
+    id: str
+    account_id: str
+    mode: str
+    lengths: tuple[int, ...]
+    cursor: int
+    total: int
+    checked: int
+    available: int
+    status: str
+    error: str
+    created_at: str
+    updated_at: str
+    generator_version: int
+    strategy: str = "exhaustive"
+    network_checked: int = 0
+    cache_hits: int = 0
+    dedup_hits: int = 0
+    pause_reason: str = ""
+    config_json: str = "{}"
+
+    @property
+    def network_checks(self) -> int:
+        return self.network_checked
+
+    @property
+    def deduplicated_hits(self) -> int:
+        return self.dedup_hits
