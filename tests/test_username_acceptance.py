@@ -286,3 +286,61 @@ def test_leader_short_deadline_expires_during_cooldown_while_follower_completes(
     scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
 
     t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(
+            scanner_a.run,
+            scan_a.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_duration_seconds=0.06),
+        )
+        time.sleep(0.02)
+        fut_b = pool.submit(
+            scanner_b.run,
+            scan_b.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_duration_seconds=2.0, max_network_requests=2),
+        )
+        res_a = fut_a.result(timeout=1.0)
+        elapsed_a = time.monotonic() - t0
+        res_b = fut_b.result(timeout=2.0)
+
+    assert elapsed_a < 0.20
+    assert res_a.status == "paused"
+    assert res_a.checked == 0
+    assert res_a.cursor == 0
+    assert res_a.network_checks == 0
+    assert "duration budget" in res_a.pause_reason.lower()
+
+    assert res_b.status == "completed"
+    assert res_b.checked == 1
+    assert res_b.available == 1
+    assert res_b.network_checks == 1
+    assert res_b.deduplicated_hits == 0
+    assert transport.request.call_count == 1
+    assert wait_for_active_shared_requests(timeout=1.0) is True
+
+
+def test_leader_long_deadline_completes_while_follower_short_deadline_expires(tmp_path: Path) -> None:
+    """Reverse order: Consumer A (leader, long budget) completes after cooldown while Consumer B (follower) expires."""
+    store = UsernameScanStore(tmp_path / "follower_expires_leader_lives.db")
+    store.save_cooldown(PUBLIC_CHECK_URL, time.time() + 0.24, "Rate limited")
+
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(status_code=200, json_data={"taken": False})
+
+    client_a = PublicUsernameClient(store, transport=transport, min_interval=0.0, safety_margin=0.0, jitter=0.0)
+    client_b = PublicUsernameClient(store, transport=transport, min_interval=0.0, safety_margin=0.0, jitter=0.0)
+    scanner_a = UsernameScanner(store, client_a)
+    scanner_b = UsernameScanner(store, client_b)
+
+    scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(
+            scanner_a.run,
+            scan_a.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_duration_seconds=2.0),
+        )
+        time.sleep(0.02)
