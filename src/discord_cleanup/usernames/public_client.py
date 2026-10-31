@@ -395,3 +395,56 @@ class PublicUsernameClient:
     ) -> UsernameCheckResult:
         event = cancel_event if cancel_event is not None else threading.Event()
         self._cancel_if_needed(event)
+        now_ts = self.clock()
+        now_iso = format_utc_timestamp(now_ts) if self._uses_custom_clock else utc_now()
+        validation = validate_username(username)
+        if validation:
+            invalid_res = UsernameCheckResult(
+                username,
+                UsernameStatus.INVALID,
+                now_iso,
+                validation,
+                origin=ObservationOrigin.LOCAL.value,
+                provider="public",
+            )
+            self.store.record_diagnostic(
+                provider="public",
+                scope=self.scope,
+                route=PUBLIC_USERNAME_ENDPOINT,
+                username=username,
+                classification="invalid",
+                origin="local",
+                scan_id=scan_id,
+                started_at=now_iso,
+                completed_at=now_iso,
+            )
+            return invalid_res
+
+        if use_cache and not force_recheck and self.freshness_policy.use_cache:
+            cached = self.store.get_cached_observation(
+                username, provider="public", scope=self.scope, now=self.clock()
+            )
+            if cached is not None:
+                self.store.record_diagnostic(
+                    provider="public",
+                    scope=self.scope,
+                    route=PUBLIC_USERNAME_ENDPOINT,
+                    username=username,
+                    classification=cached.status.value,
+                    origin="cache",
+                    scan_id=scan_id,
+                    started_at=now_iso,
+                    completed_at=now_iso,
+                )
+                return cached
+
+        self._sync_and_enforce_circuit_ready()
+        if can_dispatch_network is not None and not can_dispatch_network():
+            raise RequestCancelledError("Network request budget reached before dispatch.")
+
+        failures = 0
+        while True:
+            self._sync_and_enforce_circuit_ready()
+            waited_s = self._wait_until_ready(
+                event, on_backoff, max_wait_deadline_mono=max_wait_deadline_mono
+            )
