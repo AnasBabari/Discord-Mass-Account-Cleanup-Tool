@@ -1209,3 +1209,10 @@ def test_diagnostics_retention_preserves_cumulative_counters_and_excludes_idle_g
         )
 
     summary = store.diagnostics_summary(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    # Even though recent_diagnostics is capped at 10 rows, cumulative totals reflect all 15 checks!
+    assert len(store.recent_diagnostics(PUBLIC_USERNAME_SCOPE, limit=50)) == 10
+    assert summary.network_requests_total == 15
+    assert summary.definitive_network_checks == 15  # includes 3 HTTP 400 syntax rejections
+    assert summary.total_wait_seconds == pytest.approx(7.5)
+    # Active span is 15 * 2.0s = 30s (0.5 min), NOT ~1030s (which would include the 1000s idle gap)!
+    assert summary.effective_checks_per_minute == pytest.approx(15 / (30.0 / 60.0))
