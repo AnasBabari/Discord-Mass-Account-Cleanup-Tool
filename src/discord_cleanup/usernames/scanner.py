@@ -764,7 +764,61 @@ class UsernameScanner:
                     logger.warning("Username progress callback failed; saved scan state is intact.")
 
         try:
-            pass
+            while not cancel_event.is_set():
+                if scan.checked >= scan.total:
+                    return self.store.set_status(scan_id, account_id, "completed", pause_reason="")
+                if max_checks is not None and processed >= max_checks:
+                    pause_reason = f"Check limit reached ({processed}/{max_checks})"
+                    break
+                if (
+                    budget is not None
+                    and budget.max_definitive_checks is not None
+                    and definitive_this_run >= budget.max_definitive_checks
+                ):
+                    pause_reason = (
+                        f"Definitive check budget reached ({definitive_this_run}/{budget.max_definitive_checks})"
+                    )
+                    break
+                if self._is_deadline_expired(max_wait_deadline_mono):
+                    pause_reason = f"Active duration budget reached ({budget.max_duration_seconds:g}s)"  # type: ignore[union-attr]
+                    break
+
+                if scan.mode == "generated":
+                    try:
+                        next_item = next_generated_candidate(
+                            scan.lengths,
+                            scan.cursor,
+                            preferences,
+                            cancel_event=cancel_event,
+                            max_deadline_mono=max_wait_deadline_mono,
+                            monotonic=(self.clock if self._uses_custom_clock else self.monotonic),
+                        )
+                    except RequestCancelledError as gen_cancel:
+                        msg = str(gen_cancel)
+                        if "budget reached" in msg.lower():
+                            pause_reason = msg
+                            break
+                        raise
+                else:
+                    next_item = (names[scan.cursor], scan.cursor + 1) if scan.cursor < len(names) else None
+                if next_item is None:
+                    raise ValueError("Saved scan cursor is inconsistent. Start a new scan.")
+                candidate, next_cursor = next_item
+                notify("Checking")
+                validation = validate_username(candidate)
+                deduplicated = False
+                attempts_committed = 0
+                if validation:
+                    now_iso = self._now_iso()
+                    result = UsernameCheckResult(
+                        candidate,
+                        UsernameStatus.INVALID,
+                        now_iso,
+                        validation,
+                        origin=ObservationOrigin.LOCAL.value,
+                        provider=provider,
+                        _clock=self.clock,
+                    )
         except (RequestCancelledError, KeyboardInterrupt):
             pass
         except Exception as exc:
