@@ -449,6 +449,53 @@ class PublicUsernameClient:
                 event, on_backoff, max_wait_deadline_mono=max_wait_deadline_mono
             )
             try:
-                pass
+                with self.store.public_request_lock():
+                    self._cancel_if_needed(event)
+                    self._sync_and_enforce_circuit_ready()
+                    if self.store.cooldown(self.url, scope=self.scope)[0] > self.clock():
+                        continue
+                    if can_dispatch_network is not None and not can_dispatch_network():
+                        raise RequestCancelledError("Network request budget reached before dispatch.")
+                    resolved_deadline = self._resolve_deadline(max_wait_deadline_mono)
+                    if resolved_deadline is not None:
+                        current_clock = self.clock() if self._uses_custom_clock else self.monotonic()
+                        if current_clock >= resolved_deadline:
+                            raise RequestCancelledError("Active duration budget reached before dispatch.")
+                    if on_network_request is not None:
+                        on_network_request()
+                    self._cancel_if_needed(event)
+                    # Reserve the slot before dispatch; another process cannot race this request.
+                    self._record_deadline(self.min_interval, "Request pacing")
+                    req_start_clock = self.clock()
+                    req_start_iso = format_utc_timestamp(req_start_clock) if self._uses_custom_clock else utc_now()
+                    try:
+                        response = self.transport.request(
+                            "POST",
+                            self.url,
+                            json_data={"username": username},
+                            cancel_event=event,
+                        )
+                    except (NetworkError, RequestTimeoutError) as exc:
+                        failures += 1
+                        self._consecutive_failures += 1
+                        total_consec = max(failures, self._consecutive_failures)
+                        backoff_delay = float(2**failures) + self._compute_jitter()
+                        retry_deadline = self._record_deadline(backoff_delay, "Network retry")
+                        req_end_iso = format_utc_timestamp(self.clock()) if self._uses_custom_clock else utc_now()
+                        state = (
+                            ProviderHealthState.PAUSED_FAILURES
+                            if total_consec >= self.max_network_retries
+                            else ProviderHealthState.BACKING_OFF
+                        )
+                        self.store.save_provider_health(
+                            self.scope,
+                            state,
+                            "Public check failed after three connection attempts. Availability is unverified."
+                            if total_consec >= self.max_network_retries
+                            else f"Connection failure ({total_consec}/{self.max_network_retries}); backing off.",
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                            retry_at=retry_deadline,
+                        )
             except Timeout:
                 pass
