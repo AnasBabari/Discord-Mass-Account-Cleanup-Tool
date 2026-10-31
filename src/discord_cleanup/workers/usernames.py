@@ -140,4 +140,58 @@ class UsernameScanWorker(CancellableTokenWorker):
                     message = message.replace(self.token, "[REDACTED_TOKEN]")
                 self.error_signal.emit(message)
         finally:
-            pass
+            if client is not None:
+                client.clear_token()
+            if owned_transport is not None:
+                owned_transport.close()
+            self.custom_text = ""
+            self.scrub_token()
+
+
+class UsernameResultsWorker(CancellableTokenWorker):
+    """Keep potentially large exports and clipboard preparation off the GUI thread."""
+
+    result_signal = pyqtSignal(str)
+    error_signal = pyqtSignal(str)
+
+    def __init__(
+        self,
+        store_path: str | Path,
+        scan_id: str,
+        account_id: str,
+        destination: str | None = None,
+        *,
+        fresh_only: bool = False,
+        clock: Callable[[], float] | None = None,
+    ):
+        super().__init__("")
+        self.store_path = store_path
+        self.scan_id = scan_id
+        self.account_id = account_id
+        self.destination = destination
+        self.fresh_only = fresh_only
+        self.clock = clock
+
+    def run(self) -> None:
+        try:
+            if self.is_cancelled():
+                return
+            effective_clock = self.clock or time.time
+            store = UsernameScanStore(self.store_path, clock=effective_clock)
+            if self.destination is not None:
+                store.export_csv(self.scan_id, self.account_id, self.destination, cancel_event=self._cancel_event)
+                value = "Username results exported."
+            else:
+                names = []
+                for result in store.iter_results(
+                    self.scan_id, self.account_id, fresh_only=self.fresh_only, now=effective_clock()
+                ):
+                    if self.is_cancelled():
+                        return
+                    names.append(result.username)
+                value = "\n".join(names)
+            if not self.is_cancelled():
+                self.result_signal.emit(value)
+        except Exception as exc:
+            if not self.is_cancelled():
+                self.error_signal.emit(sanitize_token(str(exc)))
