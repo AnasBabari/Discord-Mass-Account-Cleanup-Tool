@@ -172,3 +172,63 @@ def test_consumer_a_cancels_between_reservation_and_dispatch_transfers_to_consum
 
     scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
     scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(
+            scanner_a.run,
+            scan_a.id,
+            PUBLIC_USERNAME_SCOPE,
+            cancel_a,
+            budget=RequestBudget(max_network_requests=1),
+        )
+        time.sleep(0.03)
+        fut_b = pool.submit(
+            scanner_b.run,
+            scan_b.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_network_requests=2),
+        )
+        time.sleep(0.03)
+        b_joined.set()
+        res_a = fut_a.result(timeout=3.0)
+        res_b = fut_b.result(timeout=3.0)
+
+    assert transport.request.call_count == 1
+    assert res_a.status == "paused"
+    assert res_a.checked == 0
+    assert res_a.cursor == 0
+    assert res_a.network_checks == 0
+
+    assert res_b.status == "completed"
+    assert res_b.checked == 1
+    assert res_b.available == 1
+    assert res_b.network_checks == 1
+    assert res_b.deduplicated_hits == 0
+
+
+def test_both_consumers_exhausted_budgets_before_dispatch_dispatches_zero_further_requests(tmp_path: Path) -> None:
+    """When both consumers exhaust their budgets before dispatch, 0 further requests are sent."""
+    store = UsernameScanStore(tmp_path / "both_exhausted.db")
+    both_joined = threading.Event()
+    attempt_count = 0
+
+    def transport_request(method: str, url: str, json_data: Any = None, **kwargs: Any) -> MockResponse:
+        nonlocal attempt_count
+        both_joined.wait(timeout=2.0)
+        attempt_count += 1
+        return MockResponse(status_code=502, text="Bad Gateway")
+
+    transport = MagicMock()
+    transport.request.side_effect = transport_request
+
+    client_a = PublicUsernameClient(
+        store, transport=transport, min_interval=0.0, safety_margin=0.0, jitter=0.0, max_network_retries=3
+    )
+    client_b = PublicUsernameClient(
+        store, transport=transport, min_interval=0.0, safety_margin=0.0, jitter=0.0, max_network_retries=3
+    )
+    scanner_a = UsernameScanner(store, client_a)
+    scanner_b = UsernameScanner(store, client_b)
+
+    scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
