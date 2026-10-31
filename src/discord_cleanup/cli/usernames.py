@@ -346,6 +346,12 @@ def run_username_checker(
             print(
                 "\n  [1] Exhaustive search\n  [2] Custom list\n  [3] Resume saved scan\n  [4] View available names\n  [5] Export results CSV\n  [6] Strategy / Pattern / Seeded search\n  [7] Watchlist\n  [8] Fresh live recheck\n  [9] Diagnostics & health\n  [Q] Back"
             )
+            try:
+                pass
+            except (KeyboardInterrupt, EOFError):
+                pass
+            except Exception as exc:
+                pass
     except (KeyboardInterrupt, EOFError):
         pass
     except Exception as exc:
