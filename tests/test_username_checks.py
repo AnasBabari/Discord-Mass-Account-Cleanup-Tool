@@ -104,3 +104,15 @@ def test_rate_limit_is_bounded(username_client):
     with pytest.raises(RateLimitExceededError):
         username_client.check_username_availability("abc")
     assert username_client.transport.request.call_count == 2
+
+
+def test_invalid_json_and_token_redaction(username_client):
+    username_client.transport.request.return_value = MockResponse(text="not JSON")
+    with pytest.raises(InvalidPayloadError, match="non-JSON"):
+        username_client.check_username_availability("abc")
+    username_client.transport.request.return_value = MockResponse(
+        status_code=500, json_data={"message": "private-token"}
+    )
+    with pytest.raises(InvalidPayloadError) as error:
+        username_client.check_username_availability("abc")
+    assert "private-token" not in str(error.value)
