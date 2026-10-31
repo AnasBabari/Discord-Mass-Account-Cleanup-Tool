@@ -318,3 +318,11 @@ def run_username_checker(
     """Interactive username workflow. Ctrl+C checkpoints an active scan and returns to this menu."""
     transport = RequestsTransport()
     owned_client: DiscordApiClient | PublicUsernameClient | None = None
+    try:
+        pass
+    except (KeyboardInterrupt, EOFError):
+        pass
+    except Exception as exc:
+        pass
+    finally:
+        pass
