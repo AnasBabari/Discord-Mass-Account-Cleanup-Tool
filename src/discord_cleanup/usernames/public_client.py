@@ -642,5 +642,53 @@ class PublicUsernameClient:
                             consecutive_rate_limits=self._consecutive_rate_limits,
                             retry_at=active_deadline,
                         )
+                        self.store.record_diagnostic(
+                            provider="public",
+                            scope=self.scope,
+                            route=PUBLIC_USERNAME_ENDPOINT,
+                            username=username,
+                            classification="rate_limited",
+                            origin="network",
+                            scan_id=scan_id,
+                            started_at=req_start_iso,
+                            completed_at=req_end_iso,
+                            http_status=429,
+                            latency_ms=latency_ms,
+                            ratelimit_limit=rl_meta.limit,
+                            ratelimit_remaining=rl_meta.remaining,
+                            ratelimit_reset_after=rl_meta.reset_after,
+                            ratelimit_bucket=rl_meta.bucket,
+                            ratelimit_scope=rl_meta.scope,
+                            ratelimit_global=rl_meta.is_global,
+                            retry_at=active_deadline,
+                            retry_reason=active_reason or "Rate limited",
+                            wait_seconds=waited_s,
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                        )
+                        if can_dispatch_network is not None and not can_dispatch_network():
+                            raise RequestCancelledError("Network request budget reached.")
+                        continue
+
+                    if response.status_code >= 500:
+                        failures += 1
+                        self._consecutive_failures += 1
+                        total_consec = max(failures, self._consecutive_failures)
+                        retry_deadline = self._record_deadline(
+                            float(2**failures) + self._compute_jitter(), "Network retry"
+                        )
+                        state = (
+                            ProviderHealthState.PAUSED_FAILURES
+                            if total_consec >= self.max_network_retries
+                            else ProviderHealthState.BACKING_OFF
+                        )
+                        self.store.save_provider_health(
+                            self.scope,
+                            state,
+                            f"Server error HTTP {response.status_code}",
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                            retry_at=retry_deadline,
+                        )
             except Timeout:
                 pass
