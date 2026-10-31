@@ -590,3 +590,61 @@ def test_priority_heuristic_and_candidate_preview():
 
 def test_default_exhaustive_preserves_generator_v1(tmp_path):
     store = UsernameScanStore(tmp_path / "v1.db")
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="generated", lengths=(3, 4))
+    assert scan.generator_version == GENERATOR_VERSION
+
+
+# ---------------------------------------------------------------------------
+# 7. Watchlist & freshness-aware recheck
+# ---------------------------------------------------------------------------
+
+
+def test_watchlist_persistence_and_freshness_aware_recheck(tmp_path):
+    clock = FakeClock(5000.0)
+    store = UsernameScanStore(tmp_path / "watchlist.db")
+    added = store.add_watchlist(PUBLIC_USERNAME_SCOPE, ["cat", "dog", "bad..name"])
+    assert added == ["cat", "dog"]
+
+    # Cache "cat" as fresh unavailable; leave "dog" unobserved
+    store.save_cached_observation(
+        UsernameCheckResult("cat", UsernameStatus.UNAVAILABLE, format_utc_timestamp(clock.now)),
+        provider="public",
+        scope=PUBLIC_USERNAME_SCOPE,
+        now=clock.now,
+    )
+    stale_cands = store.watchlist_candidates(PUBLIC_USERNAME_SCOPE, stale_only=True, now=clock.now)
+    assert stale_cands == ["dog"]
+    all_cands = store.watchlist_candidates(PUBLIC_USERNAME_SCOPE, stale_only=False, now=clock.now)
+    assert all_cands == ["dog", "cat"]
+
+
+# ---------------------------------------------------------------------------
+# 8. Simulated workload: exact requests avoided by cache, dedup, local check
+# ---------------------------------------------------------------------------
+
+
+def test_simulated_workload_quantifies_requests_avoided(tmp_path):
+    clock = FakeClock(20000.0)
+    store = UsernameScanStore(tmp_path / "workload.db")
+    transport = MagicMock()
+    transport.request.side_effect = lambda method, url, json_data=None, **kw: MockResponse(
+        json_data={"taken": json_data["username"] != "gem"}
+    )
+    client = PublicUsernameClient(store, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    # Scan 1: 4 valid names ("aaa", "aab", "gem", "xyz") + 2 locally invalid names ("a..", "ab")
+    scan1 = store.create_scan(
+        PUBLIC_USERNAME_SCOPE,
+        mode="custom",
+        names=["aaa", "aab", "gem", "xyz", "a..", "ab"],
+    )
+    res1 = scanner.run(scan1.id, PUBLIC_USERNAME_SCOPE)
+    assert res1.status == "completed"
+    assert res1.checked == 6
+    assert res1.available == 1
+    assert res1.network_checks == 4
+    assert res1.cache_hits == 0
+
+    # Scan 2 (overlapping custom list): ["aaa", "aab", "gem", "new1", "bad.."]
+    clock.now += 30.0
