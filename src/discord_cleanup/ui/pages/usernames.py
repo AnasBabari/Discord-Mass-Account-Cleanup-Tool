@@ -971,3 +971,27 @@ class UsernamesPage(QWidget):
         self._session += 1
         if self.worker is not None and self.worker.isRunning():
             self._retire_worker(self.worker)
+        if self.results_worker is not None and self.results_worker.isRunning():
+            self._retire_worker(self.results_worker)
+        self.worker = None
+        self.results_worker = None
+        self.token = ""
+        self.account_id = ""
+        self.scan = None
+        self._last_health = None
+        self._last_diagnostics = None
+        self._next_expiry_epoch = None
+        self.offset = 0
+        self.history_input.clear()
+        self.provider_input.blockSignals(True)
+        self.provider_input.clear()
+        self.provider_input.addItem("Public · no login", "public")
+        self.provider_input.blockSignals(False)
+        self.custom_input.clear()
+        self.table.setRowCount(0)
+        self.progress.setValue(0)
+        self.status_label.setText("Ready. Start a new scan or load saved progress.")
+        self.page_label.setText("0 results")
+        self.previous_btn.setEnabled(False)
+        self.next_btn.setEnabled(False)
+        self.set_busy(False)
