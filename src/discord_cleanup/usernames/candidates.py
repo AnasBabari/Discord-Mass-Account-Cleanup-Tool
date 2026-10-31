@@ -350,3 +350,63 @@ def _count_domain_matches_for_length(length: int, alphabet: str, pattern: str) -
         return _count_position_constrained([alpha_set] * length)
 
     matching_templates = [t for t in templates if len(t) == length]
+    if not matching_templates:
+        return 0
+
+    if len(matching_templates) == 1:
+        tmpl = matching_templates[0]
+        allowed_per_pos = [
+            {c for c in alpha_set if _template_char_matches(c, tmpl[pos])}
+            for pos in range(length)
+        ]
+        return _count_position_constrained(allowed_per_pos)
+
+    # Multiple templates of `length`: DP over (bitmask_of_still_matching_templates, prev_was_dot)
+    full_mask = (1 << len(matching_templates)) - 1
+    dp: dict[tuple[int, bool], int] = {(full_mask, False): 1}
+    for pos in range(length):
+        # Group characters at `pos` by (template_match_mask, is_dot)
+        transitions: dict[tuple[int, bool], int] = {}
+        for ch in alpha_set:
+            mask = 0
+            for idx, tmpl in enumerate(matching_templates):
+                if _template_char_matches(ch, tmpl[pos]):
+                    mask |= 1 << idx
+            is_dot = ch == "."
+            transitions[(mask, is_dot)] = transitions.get((mask, is_dot), 0) + 1
+
+        next_dp: dict[tuple[int, bool], int] = {}
+        for (cur_mask, prev_dot), ways in dp.items():
+            for (ch_mask, is_dot), count in transitions.items():
+                if prev_dot and is_dot:
+                    continue
+                new_mask = cur_mask & ch_mask
+                if new_mask == 0:
+                    continue
+                key = (new_mask, is_dot)
+                next_dp[key] = next_dp.get(key, 0) + ways * count
+        dp = next_dp
+        if not dp:
+            return 0
+
+    return sum(ways for (mask, _), ways in dp.items() if mask != 0)
+
+
+def candidate_count(
+    lengths: tuple[int, ...],
+    preferences: CandidatePreferences | None = None,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> int:
+    if cancel_event is not None and cancel_event.is_set():
+        raise RequestCancelledError("Candidate counting cancelled.")
+    validated = validate_lengths(lengths)
+    alphabet = resolve_alphabet(preferences)
+    pattern = (preferences.pattern if preferences is not None else "any").strip() or "any"
+    priority_list, _ = _normalize_priority_entries(validated, preferences)
+
+    cache_key = (validated, alphabet, pattern, tuple(priority_list))
+    with _CACHE_LOCK:
+        cached = _CANDIDATE_COUNT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
