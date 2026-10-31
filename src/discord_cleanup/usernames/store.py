@@ -506,3 +506,63 @@ class UsernameScanStore:
             retry_at=retry_at,
             updated_at=str(row["updated_at"]),
         )
+
+    def save_provider_health(
+        self,
+        provider: str,
+        state: ProviderHealthState,
+        reason: str = "",
+        *,
+        consecutive_failures: int = 0,
+        consecutive_rate_limits: int = 0,
+        retry_at: float = 0.0,
+        now: float | None = None,
+    ) -> ProviderHealth:
+        clean_reason = sanitize_token(reason)
+        now_str = utc_now()
+        safe_retry = retry_at if (not isinstance(retry_at, bool) and math.isfinite(retry_at) and retry_at >= 0) else 0.0
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO provider_health (provider, state, reason, consecutive_failures, consecutive_rate_limits, retry_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET "
+                "state=excluded.state, reason=excluded.reason, "
+                "consecutive_failures=excluded.consecutive_failures, "
+                "consecutive_rate_limits=excluded.consecutive_rate_limits, "
+                "retry_at=MAX(provider_health.retry_at, excluded.retry_at), "
+                "updated_at=excluded.updated_at",
+                (
+                    provider,
+                    state.value,
+                    clean_reason,
+                    max(0, int(consecutive_failures)),
+                    max(0, int(consecutive_rate_limits)),
+                    safe_retry,
+                    now_str,
+                ),
+            )
+        return self.get_provider_health(provider, now=now)
+
+    def reset_provider_health(
+        self,
+        provider: str = PUBLIC_USERNAME_SCOPE,
+        route: str = "",
+        now: float | None = None,
+    ) -> ProviderHealth:
+        """Deliberate user retry action: resets circuit breaker without shortening any active server cooldown."""
+        current_now = float(self.clock()) if now is None else float(now)
+        cooldown_at, cooldown_reason = self.cooldown(route, scope=provider) if route else (0.0, "")
+        if cooldown_at > current_now and cooldown_reason == "Rate limited":
+            next_state = ProviderHealthState.WAITING_COOLDOWN
+            next_reason = cooldown_reason
+        else:
+            next_state = ProviderHealthState.READY
+            next_reason = ""
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO provider_health (provider, state, reason, consecutive_failures, consecutive_rate_limits, retry_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET "
+                "state=excluded.state, reason=excluded.reason, consecutive_failures=0, "
+                "retry_at=?, updated_at=excluded.updated_at",
+                (provider, next_state.value, next_reason, 0, 0, cooldown_at, utc_now(), cooldown_at),
+            )
+        return self.get_provider_health(provider, route=route, now=current_now)
