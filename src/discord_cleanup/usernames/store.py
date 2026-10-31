@@ -142,4 +142,23 @@ CREATE TABLE IF NOT EXISTS diagnostics_counters (
     scope TEXT PRIMARY KEY,
     definitive_network_checks INTEGER NOT NULL DEFAULT 0,
     cached_reused INTEGER NOT NULL DEFAULT 0,
+    dedup_avoided INTEGER NOT NULL DEFAULT 0,
+    local_invalid_avoided INTEGER NOT NULL DEFAULT 0,
+    wait_seconds_total REAL NOT NULL DEFAULT 0.0,
+    network_requests_total INTEGER NOT NULL DEFAULT 0,
+    rate_limit_responses_total INTEGER NOT NULL DEFAULT 0,
+    error_responses_total INTEGER NOT NULL DEFAULT 0,
+    active_duration_seconds REAL NOT NULL DEFAULT 0.0,
+    first_started_at TEXT NOT NULL DEFAULT '',
+    last_completed_at TEXT NOT NULL DEFAULT '',
+    last_interval_start REAL NOT NULL DEFAULT 0.0,
+    last_interval_end REAL NOT NULL DEFAULT 0.0
+);
+CREATE TABLE IF NOT EXISTS watchlist (
+    account_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (account_id, username)
+);
 """
