@@ -196,3 +196,9 @@ def run_username_cli_args(
     resolved_store_path = args.store_path or store_path
     transport = RequestsTransport()
     owned_client: DiscordApiClient | PublicUsernameClient | None = None
+    try:
+        pass
+    except KeyboardInterrupt:
+        pass
+    finally:
+        pass
