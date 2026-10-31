@@ -911,3 +911,63 @@ class UsernamesPage(QWidget):
 
     def copy_available(self) -> None:
         self._prepare_results()
+
+    def _prepare_results(self, destination: str | None = None) -> None:
+        if self.scan is None or (self.results_worker is not None and self.results_worker.isRunning()):
+            return
+        session = self._session
+        fresh_only = self.filter_input.currentData() == "available_fresh"
+        worker = UsernameResultsWorker(
+            self.store().path,
+            self.scan.id,
+            self.account_id,
+            destination,
+            fresh_only=fresh_only,
+            clock=self.clock,
+        )
+        self.results_worker = self.worker_tracker(worker)
+
+        def current() -> bool:
+            return session == self._session and self.results_worker is worker
+
+        def ready(value: str) -> None:
+            if current():
+                if destination is None:
+                    clipboard = QApplication.clipboard()
+                    if clipboard is not None:
+                        clipboard.setText(value)
+                    self.log_msg_signal.emit("Available usernames copied.", "success")
+                else:
+                    self.log_msg_signal.emit(value, "success")
+
+        worker.result_signal.connect(ready)
+        worker.error_signal.connect(lambda message: self.on_error(message) if current() else None)
+        worker.finished.connect(
+            lambda: self.set_busy(bool(self.worker and self.worker.isRunning())) if current() else None
+        )
+        self.copy_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+        worker.start()
+
+    def export_results(self) -> None:
+        if self.scan is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export username results", "username-results.csv", "CSV files (*.csv)"
+        )
+        if path:
+            self._prepare_results(path)
+
+    def _retire_worker(self, previous: CancellableTokenWorker) -> None:
+        self._retired_workers.append(previous)
+        previous.finished.connect(
+            lambda: self._retired_workers.remove(previous) if previous in self._retired_workers else None
+        )
+        previous.cancel()
+        if not previous.isRunning() and previous in self._retired_workers:
+            self._retired_workers.remove(previous)
+
+    def clear(self) -> None:
+        self._session += 1
+        if self.worker is not None and self.worker.isRunning():
+            self._retire_worker(self.worker)
