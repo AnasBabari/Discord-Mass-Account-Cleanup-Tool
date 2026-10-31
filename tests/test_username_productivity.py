@@ -887,5 +887,34 @@ def test_migration_runs_once_preserves_expires_at_and_handles_malformed_timestam
                 PRIMARY KEY (scan_id, username)
             );
             INSERT INTO scans VALUES (
+                's-old', 'public:discord', 'custom', '[3]', '["abc","def","badts","cachedrow"]',
+                4, 4, 4, 2, 'completed', '',
+                '2026-10-31T08:00:00+00:00', '2026-10-31T08:00:00+00:00', 1
+            );
+            INSERT INTO scans VALUES (
+                's-new', 'public:discord', 'custom', '[3]', '["abc"]',
+                1, 1, 1, 0, 'completed', '',
+                '2026-10-31T09:00:00+00:00', '2026-10-31T09:00:00+00:00', 1
+            );
+            -- Older observation says "abc" is available at 08:00
+            INSERT INTO results VALUES (
+                's-old', 'abc', 'available', '2026-10-31T08:00:00+00:00', '', 'network', '2026-10-31T08:15:00+00:00'
+            );
+            -- Newer observation says "abc" is unavailable at 09:00
+            INSERT INTO results VALUES (
+                's-new', 'abc', 'unavailable', '2026-10-31T09:00:00+00:00', '', 'network', '2026-10-31T15:00:00+00:00'
+            );
+            -- Row with custom established expires_at
+            INSERT INTO results VALUES (
+                's-old', 'def', 'available', '2026-10-31T08:00:00+00:00', '', 'network', '2026-10-31T08:05:00+00:00'
+            );
+            -- Row with malformed timestamp
+            INSERT INTO results VALUES (
+                's-old', 'badts', 'available', 'not-a-valid-timestamp', '', 'network', ''
+            );
+            -- Row with origin='cache' must NOT be treated as a new primary network observation
+            INSERT INTO results VALUES (
+                's-old', 'cachedrow', 'available', '2026-10-31T08:00:00+00:00', '', 'cache', '2026-10-31T08:15:00+00:00'
+            );
             """
         )
