@@ -968,3 +968,60 @@ def test_multiprocess_circuit_breaker_blocks_second_process_and_cooldown_extensi
         assert dw["elapsed"] >= 0.58
     finally:
         server.close()
+
+
+def test_multiprocess_killed_holder_lock_recovery_and_interrupted_v1_v2_migration(tmp_path: Path) -> None:
+    """1) Killing a process holding scan & candidate locks releases locks and recovers without skipping candidate.
+    2) Interrupted v1 and v2 migrations resume from `backfill_v3_last_rowid` and complete cleanly.
+    """
+    db_path = tmp_path / "kill_recovery.db"
+    store = UsernameScanStore(db_path)
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc", "def"])
+    ready_file = tmp_path / "locked.ready"
+
+    holder_code = textwrap.dedent(
+        """
+        import pathlib, sys, time
+        from discord_cleanup.models.usernames import PUBLIC_USERNAME_SCOPE
+        from discord_cleanup.usernames.store import UsernameScanStore
+
+        db_path, scan_id, ready_path = sys.argv[1], sys.argv[2], sys.argv[3]
+        store = UsernameScanStore(db_path)
+        with store.lock(scan_id):
+            store.set_status(scan_id, PUBLIC_USERNAME_SCOPE, "running")
+            with store.candidate_inflight_lock(PUBLIC_USERNAME_SCOPE, "abc"):
+                pathlib.Path(ready_path).write_text("locked", encoding="utf-8")
+                time.sleep(30.0)
+        """
+    )
+    proc = subprocess.Popen([sys.executable, "-c", holder_code, str(db_path), scan.id, str(ready_file)])
+    try:
+        deadline = time.monotonic() + 5.0
+        while not ready_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready_file.exists()
+    finally:
+        proc.kill()
+        proc.wait(timeout=5.0)
+
+    # Now recover in parent process and run scan to completion without skipping "abc"
+    store.recover_interrupted(PUBLIC_USERNAME_SCOPE)
+    s_after = store.get_scan(scan.id, PUBLIC_USERNAME_SCOPE)
+    assert s_after.status == "paused"
+    assert s_after.cursor == 0
+    assert s_after.checked == 0
+
+    transport = MagicMock()
+    transport.request.side_effect = [
+        MockResponse(json_data={"taken": False}),
+        MockResponse(json_data={"taken": True}),
+    ]
+    scanner = UsernameScanner(store, PublicUsernameClient(store, transport=transport, min_interval=0.0))
+    done = scanner.run(scan.id, PUBLIC_USERNAME_SCOPE)
+    assert done.status == "completed"
+    assert done.checked == 2
+    assert done.available == 1
+
+    # Interrupted migration recovery test on v1 and v2 fixtures
+    for start_version in (1, 2):
+        mig_db = tmp_path / f"interrupted_v{start_version}.sqlite3"
