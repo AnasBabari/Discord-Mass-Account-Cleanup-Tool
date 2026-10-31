@@ -51,3 +51,35 @@ from discord_cleanup.usernames.candidates import (
 MAX_DIAGNOSTICS_ROWS = 500
 SCHEMA_VERSION = 3
 MIGRATION_BATCH_SIZE = 500
+
+BASE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scans (
+    id TEXT PRIMARY KEY, account_id TEXT NOT NULL, mode TEXT NOT NULL,
+    lengths TEXT NOT NULL, names TEXT NOT NULL, cursor INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL, checked INTEGER NOT NULL DEFAULT 0,
+    available INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'paused',
+    error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    generator_version INTEGER NOT NULL,
+    strategy TEXT NOT NULL DEFAULT 'exhaustive',
+    network_checked INTEGER NOT NULL DEFAULT 0,
+    cache_hits INTEGER NOT NULL DEFAULT 0,
+    dedup_hits INTEGER NOT NULL DEFAULT 0,
+    pause_reason TEXT NOT NULL DEFAULT '',
+    config_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS scans_account ON scans(account_id, updated_at);
+CREATE TABLE IF NOT EXISTS results (
+    scan_id TEXT NOT NULL REFERENCES scans(id), username TEXT NOT NULL,
+    status TEXT NOT NULL, checked_at TEXT NOT NULL, message TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'network',
+    provider TEXT NOT NULL DEFAULT '',
+    expires_at TEXT NOT NULL DEFAULT '',
+    reused_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (scan_id, username)
+);
+CREATE INDEX IF NOT EXISTS results_status ON results(scan_id, status, username);
+"""
