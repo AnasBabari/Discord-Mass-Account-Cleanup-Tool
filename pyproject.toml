@@ -35,6 +35,8 @@ dependencies = [
     "keyring>=24.3.0",
     "PyQt5>=5.15.10",
     "qtawesome>=1.3.1",
+    "platformdirs>=4.0.0",
+    "filelock>=3.13.0",
 ]
 
 [project.optional-dependencies]
@@ -99,6 +101,9 @@ files = [
     "src/discord_cleanup/gateway",
     "src/discord_cleanup/logging",
     "src/discord_cleanup/cli",
+    "src/discord_cleanup/usernames",
+    "src/discord_cleanup/workers/usernames.py",
+    "src/discord_cleanup/ui/pages/usernames.py",
 ]
 
 [tool.coverage.run]
