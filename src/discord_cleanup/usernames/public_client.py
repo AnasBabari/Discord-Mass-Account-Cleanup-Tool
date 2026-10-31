@@ -277,3 +277,61 @@ class PublicUsernameClient:
             elif utc_remaining > 0:
                 self._mono_deadlines[self.url] = (deadline, now_mono + utc_remaining)
         return utc_remaining, reason, deadline
+
+    @staticmethod
+    def _resolve_deadline(
+        max_wait_deadline_mono: float | Callable[[], float | None] | None,
+    ) -> float | None:
+        if callable(max_wait_deadline_mono):
+            return max_wait_deadline_mono()
+        return max_wait_deadline_mono
+
+    def _wait_until_ready(
+        self,
+        event: threading.Event,
+        on_backoff: Callable[[float], None] | None,
+        *,
+        max_wait_deadline_mono: float | Callable[[], float | None] | None = None,
+    ) -> float:
+        last_notification = -math.inf
+        waited_total = 0.0
+        while True:
+            self._cancel_if_needed(event)
+            remaining, reason, deadline = self._remaining_cooldown()
+            if remaining <= 0:
+                return waited_total
+            resolved_deadline = self._resolve_deadline(max_wait_deadline_mono)
+            if resolved_deadline is not None:
+                current_clock = self.clock() if self._uses_custom_clock else self.monotonic()
+                budget_remaining = resolved_deadline - current_clock
+                if budget_remaining <= 0:
+                    raise RequestCancelledError("Active duration budget reached during cooldown wait.")
+            if reason.startswith("Rate limited") or reason.startswith("Global rate limit"):
+                self.store.save_provider_health(
+                    self.scope,
+                    ProviderHealthState.WAITING_COOLDOWN,
+                    reason,
+                    consecutive_failures=self._consecutive_failures,
+                    consecutive_rate_limits=self._consecutive_rate_limits,
+                    retry_at=deadline,
+                )
+            if (
+                on_backoff is not None
+                and (reason == "Rate limited" or reason.startswith("Global rate limit"))
+                and self.clock() - last_notification >= 1
+            ):
+                on_backoff(remaining)
+                last_notification = self.clock()
+            step = min(remaining, 1.0)
+            resolved_deadline = self._resolve_deadline(max_wait_deadline_mono)
+            if resolved_deadline is not None:
+                current_clock = self.clock() if self._uses_custom_clock else self.monotonic()
+                step = min(step, max(0.01, resolved_deadline - current_clock))
+            before = self.clock()
+            if self.wait(event, step):
+                self._cancel_if_needed(event)
+            after = self.clock()
+            waited_total += max(0.0, after - before) if after > before else step
+
+    def _save_response_cooldown(self, response: Any, payload: Any) -> RateLimitMetadata:
+        now = self.clock()
