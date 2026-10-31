@@ -58,3 +58,63 @@ def test_worker_rejects_other_accounts_scan(qtbot, tmp_path, fake_client):
     with qtbot.waitSignal(worker.finished, timeout=3000):
         worker.start()
     assert "this account" in errors[0]
+    fake_client.check_username_availability.assert_not_called()
+
+
+def test_page_custom_results_copy_export_and_history(qtbot, monkeypatch, tmp_path, fake_client):
+    monkeypatch.setattr(
+        page_module,
+        "UsernameScanWorker",
+        lambda *args, **kwargs: UsernameScanWorker(*args, **kwargs, client=fake_client),
+    )
+    page = UsernamesPage(store_path=tmp_path / "scans.db")
+    qtbot.addWidget(page)
+    page.set_token("secret-token")
+    assert page.start_btn.isEnabled()
+    page.mode_input.setCurrentIndex(1)
+    page.custom_input.setPlainText("ABC, xyz a..")
+    page.start_scan()
+    qtbot.waitUntil(lambda: page.worker is not None and not page.worker.isRunning(), timeout=3000)
+    qtbot.waitUntil(lambda: page.start_btn.isEnabled(), timeout=3000)
+    assert page.scan.checked == 3
+    assert page.scan.available == 2
+    assert page.table.rowCount() == 2
+    assert not page.resume_btn.isEnabled()
+    page.copy_available()
+    qtbot.waitUntil(lambda: page.results_worker is not None and not page.results_worker.isRunning(), timeout=3000)
+    qtbot.waitUntil(lambda: page.copy_btn.isEnabled(), timeout=3000)
+    assert QApplication.clipboard().text().splitlines() == ["abc", "xyz"]
+    page.filter_input.setCurrentIndex(1)
+    assert page.table.rowCount() == 3
+    output = tmp_path / "export.csv"
+    monkeypatch.setattr(page_module.QFileDialog, "getSaveFileName", lambda *args: (str(output), ""))
+    page.export_results()
+    qtbot.waitUntil(output.exists, timeout=3000)
+    qtbot.waitUntil(lambda: not page.results_worker.isRunning(), timeout=3000)
+    assert "invalid" in output.read_text()
+    assert page.history_input.count() == 1
+    page.clear()
+    assert page.start_btn.isEnabled()  # Public checks remain accessible without a token.
+    assert page.table.rowCount() == 0
+
+
+def test_page_pagination_uses_only_one_page(qtbot, tmp_path):
+    page = UsernamesPage(store_path=tmp_path / "scans.db")
+    qtbot.addWidget(page)
+    page.set_token("secret-token")
+    page.account_id = "account-one"
+    scan = page.store().create_scan("account-one", lengths=(3,))
+    for index in range(205):
+        # Arbitrary fixture rows are enough to exercise disk-backed pagination.
+        page.store().save_result(
+            scan.id, "account-one", UsernameCheckResult(f"n{index:03}", UsernameStatus.AVAILABLE, utc_now()), index + 1
+        )
+    page.scan = page.store().get_scan(scan.id, "account-one")
+    page.show_scan()
+    assert page.table.rowCount() == 100
+    assert page.next_btn.isEnabled()
+    page.change_page(100)
+    assert page.table.rowCount() == 100
+    page.change_page(100)
+    assert page.table.rowCount() == 5
+    assert not page.next_btn.isEnabled()
