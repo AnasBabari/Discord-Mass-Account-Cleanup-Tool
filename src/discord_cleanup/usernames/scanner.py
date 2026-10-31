@@ -762,3 +762,12 @@ class UsernameScanner:
                 except Exception:
                     # A presentation failure must not overwrite a committed availability result.
                     logger.warning("Username progress callback failed; saved scan state is intact.")
+
+        try:
+            pass
+        except (RequestCancelledError, KeyboardInterrupt):
+            pass
+        except Exception as exc:
+            pass
+        finally:
+            pass
