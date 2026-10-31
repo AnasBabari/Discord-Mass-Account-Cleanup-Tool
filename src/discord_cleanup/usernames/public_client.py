@@ -497,5 +497,51 @@ class PublicUsernameClient:
                             consecutive_rate_limits=self._consecutive_rate_limits,
                             retry_at=retry_deadline,
                         )
+                        self.store.record_diagnostic(
+                            provider="public",
+                            scope=self.scope,
+                            route=PUBLIC_USERNAME_ENDPOINT,
+                            username=username,
+                            classification="network_error",
+                            origin="network",
+                            scan_id=scan_id,
+                            started_at=req_start_iso,
+                            completed_at=req_end_iso,
+                            http_status=0,
+                            latency_ms=max(0.0, (self.clock() - req_start_clock) * 1000.0),
+                            retry_at=retry_deadline,
+                            retry_reason="Network retry",
+                            wait_seconds=waited_s,
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                        )
+                        if total_consec >= self.max_network_retries:
+                            raise type(exc)(
+                                "Public check failed after three connection attempts. Availability is unverified."
+                            ) from None
+                        if can_dispatch_network is not None and not can_dispatch_network():
+                            raise RequestCancelledError("Network request budget reached.") from None
+                        continue
+
+                    latency_ms = max(0.0, (self.clock() - req_start_clock) * 1000.0)
+                    req_end_iso = format_utc_timestamp(self.clock()) if self._uses_custom_clock else utc_now()
+                    try:
+                        payload = response.json()
+                    except (ValueError, TypeError):
+                        payload = None
+
+                    rl_meta = self._save_response_cooldown(response, payload)
+                    active_deadline, active_reason = self.store.cooldown(self.url, scope=self.scope)
+
+                    if self._is_redirect_response(response, self.url):
+                        self._consecutive_failures += 1
+                        self.store.save_provider_health(
+                            self.scope,
+                            ProviderHealthState.UNINTERPRETABLE_RESPONSE,
+                            "Discord redirected the public check. Availability is unverified.",
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                            retry_at=active_deadline,
+                        )
             except Timeout:
                 pass
