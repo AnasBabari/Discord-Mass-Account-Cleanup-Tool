@@ -65,7 +65,64 @@ class UsernameScanWorker(CancellableTokenWorker):
         owned_transport = None
         client = self.client
         try:
-            pass
+            if self.is_cancelled() or (self.access == "account" and not self.token):
+                return
+            if self.access not in ("public", "account"):
+                raise ValueError("Unknown username-check source.")
+            effective_clock = self.clock or time.time
+            store = UsernameScanStore(self.store_path, clock=effective_clock)
+            if client is None:
+                owned_transport = RequestsTransport()
+                client = (
+                    PublicUsernameClient(store, transport=owned_transport, clock=effective_clock)
+                    if self.access == "public"
+                    else DiscordApiClient(self.token, transport=owned_transport)
+                )
+            scanner = UsernameScanner(store, client, clock=self.clock)
+            account_id = PUBLIC_USERNAME_SCOPE if self.access == "public" else scanner.identify(self._cancel_event)
+            if self.is_cancelled():
+                return
+            store.recover_interrupted(account_id)
+            self.account_ready.emit(account_id, store.list_scans(account_id))
+            if self.mode == "list":
+                return
+
+            force_recheck = self.force_recheck or self.mode == "recheck"
+            use_cache = self.use_cache and not force_recheck
+
+            if self.scan_id is not None and self.mode == "resume":
+                scan = store.get_scan(self.scan_id, account_id)
+            elif self.mode == "recheck":
+                names = self.recheck_names or parse_custom_names(self.custom_text)
+                scan = store.create_scan(account_id, "custom", self.lengths, names)
+            elif self.mode == "watchlist":
+                names = store.watchlist_candidates(
+                    account_id,
+                    provider="public" if self.access == "public" else "account",
+                    stale_only=not force_recheck,
+                    now=effective_clock(),
+                )
+                if not names:
+                    names = [str(item["username"]) for item in store.list_watchlist(account_id)]
+                scan = store.create_scan(account_id, "custom", self.lengths, names)
+            else:
+                scan = store.create_scan(
+                    account_id,
+                    self.mode,
+                    self.lengths,
+                    parse_custom_names(self.custom_text),
+                    preferences=self.preferences,
+                )
+            self.custom_text = ""
+            route = PUBLIC_CHECK_URL if self.access == "public" else "/users/@me/pomelo-attempt"
+            health = store.get_provider_health(account_id, route=route, now=effective_clock())
+            diag = store.diagnostics_summary(
+                account_id,
+                remaining_candidates=max(0, scan.total - scan.checked),
+                route=route,
+                now=effective_clock(),
+            )
+            self.progress_signal.emit(UsernameProgress(scan, health=health, diagnostics=diag))
         except Exception as exc:
             pass
         finally:
