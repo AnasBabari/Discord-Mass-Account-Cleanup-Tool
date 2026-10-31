@@ -115,3 +115,51 @@ def parse_rate_limit_metadata(
     reset_after = _seconds(headers.get("x-ratelimit-reset-after"))
     reset_raw = _seconds(headers.get("x-ratelimit-reset"))
     reset_delay: float | None = reset_after
+    if reset_delay is None and reset_raw is not None:
+        reference_date = _date(headers.get("date"))
+        ref = reference_date if reference_date is not None else now
+        # Distinguish epoch timestamps (>= 1e9) from relative delta values
+        reset_delay = max(0.0, reset_raw - ref) if reset_raw >= 1_000_000_000 else max(0.0, reset_raw)
+
+    if (status_code == 429 or remaining == 0) and reset_delay is not None:
+        delays.append(reset_delay)
+
+    bucket = headers.get("x-ratelimit-bucket", "").strip()
+    rl_scope = headers.get("x-ratelimit-scope", "").strip().lower()
+    header_global = headers.get("x-ratelimit-global", "").strip().lower() in ("true", "1")
+    body_global = bool(isinstance(payload, dict) and payload.get("global") is True)
+    is_global = header_global or body_global or rl_scope == "global"
+
+    safe_jitter = max(0.0, float(positive_jitter)) if math.isfinite(positive_jitter) else 0.0
+    safe_margin = max(0.0, float(safety_margin)) if math.isfinite(safety_margin) else 0.25
+
+    effective_delay = 0.0
+    reason = ""
+    base_delay = max(delays, default=default_retry)
+    if status_code == 429 or delays or is_global:
+        effective_delay = base_delay + safe_margin + safe_jitter
+        reason = "Rate limited"
+
+    return RateLimitMetadata(
+        retry_after=max(delays) if delays else (retry_seconds if retry_seconds is not None else body_delay),
+        limit=limit,
+        remaining=remaining,
+        reset_after=reset_delay,
+        reset_at=(now + reset_delay) if reset_delay is not None else None,
+        bucket=bucket,
+        scope=rl_scope,
+        is_global=is_global,
+        effective_delay=effective_delay,
+        reason=reason,
+    )
+
+
+class PublicUsernameClient:
+    """Discord's public signup check, with durable, process-shared request scheduling.
+
+    The endpoint is undocumented. Only a successful, explicit Boolean `taken` is
+    treated as evidence. No profile or server-invite lookup is used as a substitute.
+    """
+
+    token = ""
+    scope = PUBLIC_USERNAME_SCOPE
