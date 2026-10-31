@@ -27,6 +27,7 @@ class LoginPage(QWidget):
     """Login and authentication page."""
 
     login_requested = pyqtSignal(str, bool)  # (token, save_to_keyring)
+    public_usernames_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -193,6 +194,12 @@ class LoginPage(QWidget):
         c_layout.addWidget(self.login_status)
 
         main_layout.addWidget(container)
+        self.public_usernames_btn = QPushButton("Username Checker — no login required")
+        self.public_usernames_btn.setObjectName("GhostBtn")
+        self.public_usernames_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.public_usernames_btn.clicked.connect(self.public_usernames_requested)
+        main_layout.addSpacing(12)
+        main_layout.addWidget(self.public_usernames_btn)
 
     def toggle_token_visibility(self) -> None:
         if self.token_entry.echoMode() == QLineEdit.Password:
