@@ -166,3 +166,63 @@ def test_bad_retry_values_use_safe_finite_default(public_client, retry):
     ]
     client.check_username_availability("abc")
     assert clock.now == pytest.approx(1060.25)
+
+
+@pytest.mark.parametrize(
+    "status,payload,text",
+    [
+        (403, {"taken": False}, ""),
+        (401, {"taken": False}, ""),
+        (200, {"taken": False, "captcha_key": ["challenge"]}, ""),
+        (429, None, "<html>blocked</html>"),
+    ],
+)
+def test_protection_challenges_stop_without_inference(public_client, status, payload, text):
+    client, _ = public_client
+    client.transport.request.return_value = MockResponse(status_code=status, json_data=payload, text=text)
+    with pytest.raises(UpstreamBlockedError):
+        client.check_username_availability("abc")
+    assert client.transport.request.call_count == 1
+
+
+def test_network_retries_are_bounded_and_do_not_skip(public_client):
+    client, _ = public_client
+    client.transport.request.side_effect = NetworkError("Disconnected")
+    scan = client.store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc", "xyz"])
+    failed = UsernameScanner(client.store, client).run(scan.id, PUBLIC_USERNAME_SCOPE)
+    assert (failed.status, failed.cursor, failed.checked, failed.available) == ("failed", 0, 0, 0)
+    assert client.transport.request.call_count == 3
+    assert client.store.results(scan.id, PUBLIC_USERNAME_SCOPE)[1] == 0
+
+
+def test_transient_failure_recovers(public_client):
+    client, clock = public_client
+    client.transport.request.side_effect = [
+        NetworkError("offline"),
+        MockResponse(status_code=503),
+        MockResponse(json_data={"taken": False}),
+    ]
+    assert client.check_username_availability("abc").status == UsernameStatus.AVAILABLE
+    assert clock.now == 1006
+
+
+def test_malformed_and_server_error_are_not_availability(public_client):
+    client, _ = public_client
+    client.transport.request.return_value = MockResponse(status_code=500, json_data={"taken": False})
+    with pytest.raises(InvalidPayloadError):
+        client.check_username_availability("abc")
+    assert client.transport.request.call_count == 3
+
+
+def test_cancel_while_another_process_has_request_slot(public_client):
+    client, _ = public_client
+    event = threading.Event()
+
+    def cancel(event, seconds):
+        event.set()
+        return True
+
+    client.wait = cancel
+    with client.store.public_request_lock(), pytest.raises(RequestCancelledError):
+        client.check_username_availability("abc", cancel_event=event)
+    client.transport.request.assert_not_called()
