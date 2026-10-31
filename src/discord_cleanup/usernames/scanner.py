@@ -957,4 +957,25 @@ class UsernameScanner:
                 pause_reason=f"Circuit breaker ({health_state.label}): {message}",
             )
         finally:
-            pass
+            run_active = False
+
+    def recheck_names(
+        self,
+        account_id: str,
+        names: list[str],
+        *,
+        cancel_event: threading.Event | None = None,
+        on_progress: Callable[[UsernameProgress], None] | None = None,
+        budget: RequestBudget | None = None,
+    ) -> UsernameScan:
+        """Create and run an explicit fresh network recheck scan for selected names."""
+        scan = self.store.create_scan(account_id, mode="custom", names=names)
+        return self.run(
+            scan.id,
+            account_id,
+            cancel_event=cancel_event,
+            on_progress=on_progress,
+            budget=budget,
+            use_cache=False,
+            force_recheck=True,
+        )
