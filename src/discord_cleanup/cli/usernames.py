@@ -55,3 +55,63 @@ def _show_results(store: UsernameScanStore, scan: UsernameScan, account_id: str)
 
 def _print_diagnostics(store: UsernameScanStore, account_id: str, route: str) -> None:
     summary = store.diagnostics_summary(account_id, route=route)
+    rate_str = (
+        f"{summary.effective_checks_per_minute:.2f}/min"
+        if summary.effective_checks_per_minute is not None
+        else "insufficient data"
+    )
+    print("\n--- Username Checker Diagnostics ---")
+    print(f"  Scope / Source:          {account_id}")
+    print(f"  Provider Health:         {summary.provider_health.state.label} ({summary.provider_health.reason or 'OK'})")
+    print(f"  Network Requests Total:  {summary.network_requests_total:,}")
+    print(f"  Definitive Net Checks:   {summary.definitive_network_checks:,}")
+    print(f"  Cache Hits Reused:       {summary.total_cache_hits:,}")
+    print(f"  Deduplicated Avoided:    {summary.total_deduplicated:,}")
+    print(f"  Local Invalid Rejected:  {summary.total_local_invalid:,}")
+    print(f"  Cumulative Wait Time:    {summary.total_wait_seconds:.1f}s")
+    print(f"  Recent 429 Cooldowns:    {summary.recent_rate_limit_count}")
+    print(f"  Effective Network Rate:  {rate_str}")
+
+
+def build_username_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="discord-cleanup --usernames",
+        description="Public Discord 3- and 4-character username availability checker (no login required by default).",
+    )
+    parser.add_argument(
+        "--usernames",
+        action="store_true",
+        help="Run the public username checker mode.",
+    )
+    parser.add_argument(
+        "--check",
+        "--names",
+        dest="names",
+        default="",
+        help="Comma- or space-separated usernames to check non-interactively.",
+    )
+    parser.add_argument(
+        "--input-file",
+        dest="input_file",
+        default="",
+        help="Path to a text file containing candidate usernames.",
+    )
+    parser.add_argument(
+        "--lengths",
+        dest="lengths",
+        choices=("3", "4", "both"),
+        default="",
+        help="Run generated candidate search for length 3, 4, or both.",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=("exhaustive", "randomized", "priority", "watchlist"),
+        default="exhaustive",
+        help="Candidate ordering strategy (default: exhaustive).",
+    )
+    parser.add_argument(
+        "--charset",
+        choices=("all", "letters", "alphanumeric", "no_punctuation"),
+        default="all",
+        help="Character set filter for generated candidates.",
+    )
