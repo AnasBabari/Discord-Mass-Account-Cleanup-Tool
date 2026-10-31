@@ -699,3 +699,63 @@ def test_desktop_ui_live_freshness_transitions_idle_paused_waiting_and_page_swit
 # ===========================================================================
 # Section 6: Genuine Multi-Process Integration Tests
 # ===========================================================================
+
+
+class _MockDiscordServer:
+    """Thread-safe local HTTP server for multi-process username checker integration tests."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.requests: list[dict[str, Any]] = []
+        self.mode = "available"
+        self.hold_first_request = False
+        self.first_request_entered = threading.Event()
+        self.release_first_request = threading.Event()
+
+        parent = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+                payload = json.loads(raw)
+                with parent.lock:
+                    req_idx = len(parent.requests)
+                    parent.requests.append({"path": self.path, "payload": payload, "time": time.monotonic()})
+                    mode = parent.mode
+                    should_hold = parent.hold_first_request and req_idx == 0
+
+                if should_hold:
+                    parent.first_request_entered.set()
+                    parent.release_first_request.wait(timeout=5.0)
+
+                if mode == "captcha":
+                    body = json.dumps({"captcha_key": ["captcha-required"], "captcha_sitekey": "site-key"}).encode()
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+
+                body = json.dumps({"taken": payload.get("username") != "abc"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_port
+        self.base_url = f"http://127.0.0.1:{self.port}/api/v10"
+        self.url = f"{self.base_url}/unique-username/username-attempt-unauthed"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.release_first_request.set()
+        self.server.shutdown()
+        self.server.server_close()
