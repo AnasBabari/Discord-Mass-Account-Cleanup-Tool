@@ -876,8 +876,27 @@ class UsernameScanner:
 
                 if result.username != candidate or result.status == UsernameStatus.ERROR:
                     raise ValueError("Username check did not return a definitive result for this candidate.")
+                scan = self.store.save_result(
+                    scan_id,
+                    account_id,
+                    result,
+                    next_cursor,
+                    deduplicated=deduplicated,
+                    network_attempts_already_recorded=(attempts_committed > 0 or deduplicated),
+                )
+                processed += 1
+                if result.is_definitive:
+                    definitive_this_run += 1
+                notify(result=result)
+            status = "completed" if scan.checked >= scan.total else "paused"
+            return self.store.set_status(
+                scan_id,
+                account_id,
+                status,
+                pause_reason="" if status == "completed" else pause_reason,
+            )
         except (RequestCancelledError, KeyboardInterrupt):
-            pass
+            return self.store.set_status(scan_id, account_id, "paused", pause_reason=pause_reason)
         except Exception as exc:
             pass
         finally:
