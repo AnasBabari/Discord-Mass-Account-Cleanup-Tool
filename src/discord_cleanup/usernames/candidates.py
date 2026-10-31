@@ -470,3 +470,63 @@ def next_generated_candidate(
         return None
 
     assert preferences is not None
+    priority_list, _ = _normalize_priority_entries(validated, preferences)
+    priority_len = len(priority_list)
+    if cursor < priority_len:
+        return priority_list[cursor], cursor + 1
+
+    alphabet = resolve_alphabet(preferences)
+    pattern = preferences.pattern
+    domain_matches_per_len = {
+        length: _count_domain_matches_for_length(length, alphabet, pattern)
+        for length in validated
+    }
+    active_lengths = tuple(length for length in validated if domain_matches_per_len[length] > 0)
+    if not active_lengths:
+        return None
+
+    priority_set = set(priority_list)
+    domain = raw_domain_size(active_lengths, preferences)
+    gen_cursor = cursor - priority_len
+    randomized = preferences.strategy == "randomized"
+    seed = preferences.seed
+
+    steps = 0
+    while gen_cursor < domain:
+        steps += 1
+        if (steps & 255) == 0:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RequestCancelledError("Candidate generation cancelled.")
+            if max_deadline_mono is not None and monotonic() >= max_deadline_mono:
+                raise RequestCancelledError("Maximum active duration budget reached.")
+
+        raw_index = permute_index(gen_cursor, domain, seed) if randomized else gen_cursor
+        gen_cursor += 1
+        name = _decode_raw_index(active_lengths, raw_index, alphabet)
+        if name in priority_set:
+            continue
+        if matches_pattern(name, pattern):
+            return name, priority_len + gen_cursor
+    return None
+
+
+def preview_candidates(
+    mode: str = "generated",
+    lengths: tuple[int, ...] = (3, 4),
+    custom_names: list[str] | None = None,
+    preferences: CandidatePreferences | None = None,
+    limit: int = 20,
+    *,
+    sample_size: int | None = None,
+    cancel_event: threading.Event | None = None,
+) -> CandidatePreview:
+    """Generate a preview of candidates, local validation rejections, and strategy summary without network calls."""
+    if sample_size is not None:
+        limit = sample_size
+    limit = max(1, min(limit, 100))
+    prefs = preferences or CandidatePreferences()
+    if mode == "custom":
+        raw_names = list(dict.fromkeys(custom_names or []))
+        if prefs.strategy == "priority":
+            raw_names = rank_candidates_by_preference(raw_names)
+        valid_sample: list[str] = []
