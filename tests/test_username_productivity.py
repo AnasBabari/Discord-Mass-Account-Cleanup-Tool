@@ -978,3 +978,63 @@ def test_freshness_accuracy_across_results_filters_csv_and_watchlist(tmp_path):
     client = PublicUsernameClient(
         store, transport=transport, min_interval=0, clock=clock, wait=clock.wait, freshness_policy=policy
     )
+    scanner = UsernameScanner(store, client, freshness_policy=policy, clock=clock, monotonic=clock)
+
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["cat", "dog"])
+    scanner.run(scan.id, PUBLIC_USERNAME_SCOPE, max_checks=1)
+    clock.now = 10200.0
+    scanner.run(scan.id, PUBLIC_USERNAME_SCOPE, max_checks=1)
+
+    # At t=10400: "cat" (network observation from 10000) is expired/historical; "dog" (from 10200) is fresh!
+    clock.now = 10400.0
+    total_avail, fresh_avail = store.availability_counts(scan.id, PUBLIC_USERNAME_SCOPE)
+    assert total_avail == 2
+    assert fresh_avail == 1
+
+    all_avail, total_all = store.results(scan.id, PUBLIC_USERNAME_SCOPE, available_only=True)
+    assert total_all == 2
+    by_name = {r.username: r for r in all_avail}
+    # Original network origin is preserved, while time-based freshness marks "cat" as historical
+    assert by_name["cat"].origin == "network"
+    assert by_name["cat"].is_stale is True
+    assert by_name["cat"].display_status == "available (historical)"
+    assert "historical" in by_name["cat"].provenance_label()
+    assert by_name["dog"].origin == "network"
+    assert by_name["dog"].is_stale is False
+    assert by_name["dog"].display_status == "available"
+
+    fresh_rows, fresh_total = store.results(scan.id, PUBLIC_USERNAME_SCOPE, available_only=True, fresh_only=True)
+    assert fresh_total == 1
+    assert [r.username for r in fresh_rows] == ["dog"]
+    assert [r.username for r in store.iter_results(scan.id, PUBLIC_USERNAME_SCOPE, fresh_only=True)] == ["dog"]
+
+    csv_path = tmp_path / "freshness.csv"
+    store.export_csv(scan.id, PUBLIC_USERNAME_SCOPE, csv_path)
+    with csv_path.open(newline="", encoding="utf-8") as f:
+        csv_rows = {r["username"]: r for r in csv.DictReader(f)}
+    assert csv_rows["cat"]["provenance"] == "live_network"
+    assert csv_rows["cat"]["freshness"] == "historical"
+    assert csv_rows["dog"]["provenance"] == "live_network"
+    assert csv_rows["dog"]["freshness"] == "fresh"
+
+
+@pytest.mark.parametrize(
+    "first_failure",
+    [
+        NetworkError("Socket closed"),
+        MockResponse(status_code=502, text="Bad Gateway"),
+        MockResponse(status_code=429, json_data={"retry_after": 1.0}),
+    ],
+)
+def test_max_network_requests_budget_of_one_stops_after_single_transport_attempt(tmp_path, first_failure):
+    clock = FakeClock(1000.0)
+    store = UsernameScanStore(tmp_path / "strict_budget.db", clock=clock)
+    transport = MagicMock()
+    transport.request.side_effect = [
+        first_failure,
+        MockResponse(json_data={"taken": False}),
+    ]
+    client = PublicUsernameClient(
+        store, transport=transport, min_interval=0, max_network_retries=3, clock=clock, wait=clock.wait
+    )
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
