@@ -470,3 +470,63 @@ def test_request_budgets_pause_cleanly_and_cache_hits_do_not_spend_network_budge
         )
 
     # Create scan with ["aaa", "aab", "aac", "aad", "aae"] and max_network_requests=2
+    scan = store.create_scan(
+        PUBLIC_USERNAME_SCOPE,
+        mode="custom",
+        names=["aaa", "aab", "aac", "aad", "aae"],
+    )
+    budget = RequestBudget(max_network_requests=2)
+    paused = scanner.run(scan.id, PUBLIC_USERNAME_SCOPE, budget=budget)
+
+    # 2 cache hits ("aaa", "aab") + 2 live network checks ("aac", "aad") = 4 checked; pauses before "aae"
+    assert paused.status == "paused"
+    assert paused.checked == 4
+    assert paused.cursor == 4
+    assert paused.cache_hits == 2
+    assert paused.network_checks == 2
+    assert "budget" in paused.pause_reason.lower()
+    assert transport.request.call_count == 2
+
+
+def test_duration_budget_interrupts_long_cooldown_without_losing_candidate(tmp_path):
+    clock = FakeClock(1000.0)
+    store = UsernameScanStore(tmp_path / "dur_budget.db")
+    store.save_cooldown(PUBLIC_CHECK_URL, 3000.0, "Rate limited")
+    transport = MagicMock()
+    client = PublicUsernameClient(store, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    paused = scanner.run(
+        scan.id,
+        PUBLIC_USERNAME_SCOPE,
+        budget=RequestBudget(max_duration_seconds=5.0),
+    )
+    assert paused.status == "paused"
+    assert paused.checked == 0
+    assert paused.cursor == 0
+    assert clock.now == pytest.approx(1005.0)
+    transport.request.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 6. Candidate strategies: Feistel permutation, resumability, patterns, preview
+# ---------------------------------------------------------------------------
+
+
+def test_seeded_randomized_traversal_is_bijective_and_resumable_from_cursor(tmp_path):
+    # Verify permute_index is a full bijection without replacement over an arbitrary domain size
+    domain = 250
+    permuted = [permute_index(i, domain, seed=1337) for i in range(domain)]
+    assert len(permuted) == domain
+    assert set(permuted) == set(range(domain))
+
+    # Verify generator v2 with randomized strategy & pattern filter is deterministic and resumable
+    prefs = CandidatePreferences(
+        strategy="randomized",
+        charset_mode="letters",
+        pattern="CVC",
+        seed=99,
+    )
+    total = candidate_count((3,), prefs)
+    # 20 consonants * 6 vowels * 20 consonants = 2400 CVC 3-char names
