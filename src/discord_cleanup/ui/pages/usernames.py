@@ -823,3 +823,31 @@ class UsernamesPage(QWidget):
         self._refresh_metrics_label()
         preparing_results = self.results_worker is not None and self.results_worker.isRunning()
         self.copy_btn.setEnabled(not preparing_results)
+        self.export_btn.setEnabled(not preparing_results)
+        self.resume_btn.setEnabled(scan.status != "completed" and not (self.worker and self.worker.isRunning()))
+
+    def on_completed(self, scan: UsernameScan) -> None:
+        self.scan = scan
+        self.on_account(self.account_id, self.store().list_scans(self.account_id))
+        self.show_scan()
+        self.log_msg_signal.emit(
+            f"Username scan {scan.status}: {scan.checked:,} checked, {scan.available:,} available.",
+            "error" if scan.error else "info",
+        )
+        self.action_finished.emit()
+
+    def on_error(self, message: str) -> None:
+        self.status_label.setText(message)
+        self.log_msg_signal.emit(f"Username checker: {message}", "error")
+
+    def reset_results(self) -> None:
+        self.offset = 0
+        self.render_results()
+
+    def change_page(self, delta: int) -> None:
+        self.offset = max(0, self.offset + delta)
+        self.render_results()
+
+    def render_results(self) -> None:
+        if self.scan is None or not self.account_id:
+            return
