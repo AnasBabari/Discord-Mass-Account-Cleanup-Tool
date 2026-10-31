@@ -763,3 +763,63 @@ class UsernamesPage(QWidget):
         self.history_input.setCurrentIndex(max(0, index) if scans else -1)
         self.history_input.blockSignals(False)
         self.select_scan()
+        self.update_estimate()
+        if not scans:
+            self.status_label.setText("No saved scans for this source. Start a new scan.")
+
+    def select_scan(self) -> None:
+        scan_id = self.history_input.currentData()
+        if scan_id and self.account_id:
+            try:
+                self.scan = self.store().get_scan(scan_id, self.account_id)
+                self.offset = 0
+                self.show_scan()
+            except Exception as exc:
+                self.on_error(str(exc))
+
+    def on_progress(self, progress: UsernameProgress) -> None:
+        changed_scan = self.scan is None or self.scan.id != progress.scan.id
+        if changed_scan:
+            self.offset = 0
+        self.scan = progress.scan
+        if progress.health is not None:
+            self._last_health = progress.health
+        if progress.diagnostics is not None:
+            self._last_diagnostics = progress.diagnostics
+        self.show_scan(
+            progress.message, progress.candidate, refresh_results=changed_scan or progress.result is not None
+        )
+
+    def show_scan(self, message: str = "", candidate: str = "", refresh_results: bool = True) -> None:
+        if self.scan is None:
+            return
+        scan = self.scan
+        now = self.clock()
+        detail = scan.error or message or scan.pause_reason or scan.status.capitalize()
+        if scan.status == "failed" and "reset health" not in detail.lower():
+            detail = f"{detail} (Reset Health before resuming)"
+        elif scan.status == "paused" and not message and "resume" not in detail.lower():
+            detail = f"{detail} · Click Resume Selected to continue"
+        avail_label = f"{scan.available:,} available"
+        next_avail_expiry: float | None = None
+        if self.account_id and scan.available > 0:
+            try:
+                total_avail, fresh_avail, next_avail_expiry = self.store().availability_counts_and_next_expiry(
+                    scan.id, self.account_id, now=now
+                )
+                if total_avail > fresh_avail:
+                    avail_label = f"{total_avail:,} available ({fresh_avail:,} fresh, {total_avail - fresh_avail:,} historical)"
+            except Exception:
+                pass
+        self._next_expiry_epoch = next_avail_expiry
+        self.status_label.setText(
+            f"{detail}{' · ' + candidate if candidate else ''} · {scan.checked:,}/{scan.total:,} checked · {avail_label}"
+        )
+        self.progress.setRange(0, max(1, scan.total))
+        self.progress.setValue(scan.checked)
+        if refresh_results:
+            self.render_results()
+        self.update_cooldown()
+        self._refresh_metrics_label()
+        preparing_results = self.results_worker is not None and self.results_worker.isRunning()
+        self.copy_btn.setEnabled(not preparing_results)
