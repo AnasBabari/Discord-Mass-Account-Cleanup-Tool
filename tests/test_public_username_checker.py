@@ -118,3 +118,51 @@ def test_cooldown_survives_pause_restart_and_new_scan(public_client):
     completed = UsernameScanner(reopened, replacement).run(scan.id, PUBLIC_USERNAME_SCOPE)
     assert completed.status == "completed"
     assert completed.checked == 1
+    assert completed.available == 0
+    assert replacement.transport.request.call_count == 1
+
+
+def test_success_headers_schedule_next_request(public_client):
+    client, clock = public_client
+    client.transport.request.side_effect = [
+        MockResponse(
+            json_data={"taken": True}, headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset-After": "7.5"}
+        ),
+        MockResponse(json_data={"taken": False}),
+    ]
+    client.check_username_availability("abc")
+    assert client.store.cooldown(client.url)[0] == pytest.approx(1007.75)
+    assert client.check_username_availability("abcd").status == UsernameStatus.AVAILABLE
+    assert clock.now == pytest.approx(1007.75)
+
+
+def test_http_date_and_longest_deadline_are_honored(public_client):
+    client, clock = public_client
+    client.transport.request.side_effect = [
+        MockResponse(
+            status_code=429,
+            json_data={"retry_after": 2},
+            headers={
+                "Date": "Fri, 30 Oct 2026 23:00:00 GMT",
+                "Retry-After": "Fri, 30 Oct 2026 23:01:00 GMT",
+                "X-RateLimit-Reset-After": "30",
+            },
+        ),
+        MockResponse(json_data={"taken": True}),
+    ]
+    client.check_username_availability("abc")
+    assert clock.now == pytest.approx(1060.25)
+    client.store.save_cooldown(client.url, 2000, "Rate limited")
+    client.store.save_cooldown(client.url, 1100, "Request pacing")
+    assert client.store.cooldown(client.url) == (2000, "Rate limited")
+
+
+@pytest.mark.parametrize("retry", [None, -10, "invalid", float("nan"), float("inf"), True])
+def test_bad_retry_values_use_safe_finite_default(public_client, retry):
+    client, clock = public_client
+    client.transport.request.side_effect = [
+        MockResponse(status_code=429, json_data={"retry_after": retry}),
+        MockResponse(json_data={"taken": True}),
+    ]
+    client.check_username_availability("abc")
+    assert clock.now == pytest.approx(1060.25)
