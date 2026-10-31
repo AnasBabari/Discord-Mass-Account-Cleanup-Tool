@@ -766,3 +766,63 @@ def test_desktop_page_minimum_size_strategy_watchlist_and_health_reset(qtbot, mo
     page.reset_provider_health()
     assert "cooldown remains enforced" in page.status_label.text()
     assert store.cooldown(PUBLIC_CHECK_URL)[0] > time.time()
+
+
+def test_sqlite_migration_on_copy_of_legacy_schema(tmp_path):
+    db_file = tmp_path / "legacy_v2.sqlite3"
+    with sqlite3.connect(db_file) as conn:
+        conn.executescript(
+            """
+            PRAGMA user_version = 2;
+            CREATE TABLE scans (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                lengths TEXT NOT NULL,
+                names TEXT NOT NULL,
+                cursor INTEGER NOT NULL DEFAULT 0,
+                total INTEGER NOT NULL,
+                checked INTEGER NOT NULL DEFAULT 0,
+                available INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'paused',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                generator_version INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE results (
+                scan_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                status TEXT NOT NULL,
+                checked_at TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (scan_id, username)
+            );
+            CREATE TABLE username_cooldowns (
+                route TEXT PRIMARY KEY,
+                retry_at REAL NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO scans VALUES (
+                'scan-1', 'public:discord', 'generated', '[3, 4]', '[]',
+                1, 2135677, 1, 0, 'paused', '',
+                '2026-10-31T09:12:04+00:00', '2026-10-31T09:13:06+00:00', 1
+            );
+            INSERT INTO results VALUES (
+                'scan-1', 'aaa', 'unavailable', '2026-10-31T09:12:05+00:00', ''
+            );
+            INSERT INTO username_cooldowns VALUES (
+                'https://discord.com/api/v10/unique-username/username-attempt-unauthed',
+                1793440080.00228,
+                'Rate limited',
+                '2026-10-31T09:12:05+00:00'
+            );
+            """
+        )
+
+    migrated = UsernameScanStore(db_file)
+    scan = migrated.get_scan("scan-1", PUBLIC_USERNAME_SCOPE)
+    assert scan.cursor == 1
+    assert scan.checked == 1
+    assert scan.total == 2135677
