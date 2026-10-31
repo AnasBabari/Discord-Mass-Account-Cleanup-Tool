@@ -410,3 +410,63 @@ def test_concurrent_request_deduplication_and_cooperative_cancellation(tmp_path)
 
     transport1 = MagicMock()
     transport1.request.side_effect = slow_request
+    transport2 = MagicMock()
+    transport2.request.side_effect = slow_request
+
+    client1 = PublicUsernameClient(store, transport=transport1, min_interval=0)
+    client2 = PublicUsernameClient(store, transport=transport2, min_interval=0)
+    scanner1 = UsernameScanner(store, client1)
+    scanner2 = UsernameScanner(store, client2)
+
+    scan1 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan2 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+
+    cancel1 = threading.Event()
+    cancel2 = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut1 = pool.submit(scanner1.run, scan1.id, PUBLIC_USERNAME_SCOPE, cancel1)
+        assert entered.wait(timeout=2.0)
+        # Start second consumer while first check for "abc" is in-flight
+        fut2 = pool.submit(scanner2.run, scan2.id, PUBLIC_USERNAME_SCOPE, cancel2)
+        time.sleep(0.05)
+        # Cancel consumer 1 (the leader!) while consumer 2 still wants the result
+        cancel1.set()
+        res1 = fut1.result(timeout=2.0)
+        assert res1.status == "paused"
+        assert res1.checked == 0
+
+        # Release the network response so consumer 2 completes using the in-flight request
+        release.set()
+        res2 = fut2.result(timeout=2.0)
+        assert res2.status == "completed"
+        assert res2.checked == 1
+        assert res2.available == 1
+        assert res2.deduplicated_hits == 1
+
+    assert network_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# 5. Request budgets: max_network_requests, max_definitive_checks, duration
+# ---------------------------------------------------------------------------
+
+
+def test_request_budgets_pause_cleanly_and_cache_hits_do_not_spend_network_budget(tmp_path):
+    clock = FakeClock(1000.0)
+    store = UsernameScanStore(tmp_path / "budget.db")
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(json_data={"taken": True})
+    client = PublicUsernameClient(store, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    # Pre-populate cache with "aaa" and "aab"
+    for name in ("aaa", "aab"):
+        store.save_cached_observation(
+            UsernameCheckResult(name, UsernameStatus.UNAVAILABLE, format_utc_timestamp(clock.now)),
+            provider="public",
+            scope=PUBLIC_USERNAME_SCOPE,
+            now=clock.now,
+        )
+
+    # Create scan with ["aaa", "aab", "aac", "aad", "aae"] and max_network_requests=2
