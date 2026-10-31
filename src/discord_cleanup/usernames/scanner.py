@@ -819,6 +819,63 @@ class UsernameScanner:
                         provider=provider,
                         _clock=self.clock,
                     )
+                    self.store.record_diagnostic(
+                        provider=provider,
+                        scope=account_id,
+                        route=PUBLIC_USERNAME_ENDPOINT if provider == "public" else "/users/@me/pomelo-attempt",
+                        username=candidate,
+                        classification="invalid",
+                        origin="local",
+                        scan_id=scan_id,
+                        started_at=now_iso,
+                        completed_at=now_iso,
+                    )
+                else:
+                    try:
+                        result, deduplicated, attempts_committed = self._check_with_cache_and_dedup(
+                            candidate,
+                            account_id=account_id,
+                            scan_id=scan_id,
+                            cancel_event=cancel_event,
+                            on_backoff=lambda seconds: notify(
+                                f"Rate limited; waiting {math.ceil(seconds):,} seconds. Progress is saved."
+                            ),
+                            can_dispatch_network=can_dispatch_network,
+                            try_reserve_network=try_reserve_network,
+                            release_reserved_network=release_reserved_network,
+                            commit_reserved_network=commit_reserved_network,
+                            max_wait_deadline_mono=max_wait_deadline_mono,
+                            use_cache=effective_use_cache,
+                            force_recheck=force_recheck,
+                            before_commit_hook=before_commit_hook,
+                        )
+                    except RequestCancelledError as cancel_exc:
+                        msg = str(cancel_exc)
+                        if "budget reached" in msg.lower():
+                            if (
+                                "network request budget" in msg.lower()
+                                and budget is not None
+                                and budget.max_network_requests is not None
+                            ):
+                                pause_reason = (
+                                    f"Network request budget reached "
+                                    f"({network_requests_this_run}/{budget.max_network_requests})"
+                                )
+                            elif (
+                                "duration budget" in msg.lower()
+                                and budget is not None
+                                and budget.max_duration_seconds is not None
+                            ):
+                                pause_reason = (
+                                    f"Active duration budget reached ({budget.max_duration_seconds:g}s)"
+                                )
+                            else:
+                                pause_reason = msg
+                            break
+                        raise
+
+                if result.username != candidate or result.status == UsernameStatus.ERROR:
+                    raise ValueError("Username check did not return a definitive result for this candidate.")
         except (RequestCancelledError, KeyboardInterrupt):
             pass
         except Exception as exc:
