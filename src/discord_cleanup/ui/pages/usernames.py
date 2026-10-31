@@ -851,3 +851,63 @@ class UsernamesPage(QWidget):
     def render_results(self) -> None:
         if self.scan is None or not self.account_id:
             return
+        try:
+            now = self.clock()
+            filter_val = self.filter_input.currentData()
+            available_only = filter_val in (True, "available_fresh")
+            fresh_only = filter_val == "available_fresh"
+            results, total = self.store().results(
+                self.scan.id,
+                self.account_id,
+                available_only,
+                self.offset,
+                fresh_only=fresh_only,
+                now=now,
+            )
+            if not results and total > 0 and self.offset >= total:
+                self.offset = max(0, ((total - 1) // 100) * 100)
+                results, total = self.store().results(
+                    self.scan.id,
+                    self.account_id,
+                    available_only,
+                    self.offset,
+                    fresh_only=fresh_only,
+                    now=now,
+                )
+            _, _, next_expiry = self.store().availability_counts_and_next_expiry(
+                self.scan.id, self.account_id, now=now
+            )
+            self.table.setRowCount(len(results))
+            for row, result in enumerate(results):
+                exp_epoch = result.effective_expires_epoch()
+                if exp_epoch is not None and exp_epoch > now:
+                    if next_expiry is None or exp_epoch < next_expiry:
+                        next_expiry = exp_epoch
+                status_text = str(result.display_status)
+                details_parts = [result.message] if result.message else []
+                if result.is_cached or result.is_expired(now):
+                    details_parts.append(str(result.provenance_label))
+                details_text = " · ".join(p for p in details_parts if p)
+                for column, value in enumerate(
+                    (
+                        result.username,
+                        status_text,
+                        result.checked_at,
+                        details_text,
+                    )
+                ):
+                    item = QTableWidgetItem(value)
+                    if result.status.value == "available":
+                        item.setForeground(QColor(SUCCESS))
+                    self.table.setItem(row, column, item)
+            self._next_expiry_epoch = next_expiry
+            self.page_label.setText(
+                f"{self.offset + 1 if total else 0}–{self.offset + len(results)} of {total:,} results"
+            )
+            self.previous_btn.setEnabled(self.offset > 0)
+            self.next_btn.setEnabled(self.offset + 100 < total)
+        except Exception as exc:
+            self.on_error(str(exc))
+
+    def copy_available(self) -> None:
+        self._prepare_results()
