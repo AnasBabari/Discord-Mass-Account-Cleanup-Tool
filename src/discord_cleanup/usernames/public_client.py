@@ -602,5 +602,45 @@ class PublicUsernameClient:
 
                     if isinstance(payload, dict) and any(key.startswith("captcha_") for key in payload):
                         self._consecutive_failures += 1
+                        self.store.save_provider_health(
+                            self.scope,
+                            ProviderHealthState.BLOCKED_CHALLENGE,
+                            "Discord requires a verification challenge. Availability is unverified.",
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                            retry_at=active_deadline,
+                        )
+                        self.store.record_diagnostic(
+                            provider="public",
+                            scope=self.scope,
+                            route=PUBLIC_USERNAME_ENDPOINT,
+                            username=username,
+                            classification="blocked_challenge",
+                            origin="network",
+                            scan_id=scan_id,
+                            started_at=req_start_iso,
+                            completed_at=req_end_iso,
+                            http_status=response.status_code,
+                            latency_ms=latency_ms,
+                            retry_at=active_deadline,
+                            retry_reason="Verification challenge",
+                            wait_seconds=waited_s,
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                        )
+                        raise UpstreamBlockedError(
+                            "Discord requires a verification challenge. Availability is unverified."
+                        )
+
+                    if response.status_code == 429:
+                        self._consecutive_rate_limits += 1
+                        self.store.save_provider_health(
+                            self.scope,
+                            ProviderHealthState.WAITING_COOLDOWN,
+                            active_reason or "Rate limited",
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                            retry_at=active_deadline,
+                        )
             except Timeout:
                 pass
