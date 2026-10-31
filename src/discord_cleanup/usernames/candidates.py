@@ -410,3 +410,63 @@ def candidate_count(
         cached = _CANDIDATE_COUNT_CACHE.get(cache_key)
     if cached is not None:
         return cached
+
+    domain_matches = sum(_count_domain_matches_for_length(length, alphabet, pattern) for length in validated)
+    alpha_set = set(alphabet)
+    extra_priority = 0
+    for name in priority_list:
+        in_domain = (
+            len(name) in validated
+            and all(c in alpha_set for c in name)
+            and matches_pattern(name, pattern)
+        )
+        if not in_domain:
+            extra_priority += 1
+
+    total = domain_matches + extra_priority
+    with _CACHE_LOCK:
+        if len(_CANDIDATE_COUNT_CACHE) >= 512:
+            _CANDIDATE_COUNT_CACHE.clear()
+        _CANDIDATE_COUNT_CACHE[cache_key] = total
+    return total
+
+
+def next_generated_candidate(
+    lengths: tuple[int, ...],
+    cursor: int,
+    preferences: CandidatePreferences | None = None,
+    *,
+    cancel_event: threading.Event | None = None,
+    max_deadline_mono: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[str, int] | None:
+    """Decode a raw cursor directly; never build or replay a full candidate list in memory."""
+    if cursor < 0:
+        raise ValueError("Invalid scan cursor.")
+    if cancel_event is not None and cancel_event.is_set():
+        raise RequestCancelledError("Candidate generation cancelled.")
+    if max_deadline_mono is not None and monotonic() >= max_deadline_mono:
+        raise RequestCancelledError("Maximum active duration budget reached.")
+
+    validated = validate_lengths(lengths)
+
+    if _uses_default_exhaustive(preferences):
+        offset = 0
+        base = len(ALPHABET)
+        for length in validated:
+            size = base**length
+            index = max(0, cursor - offset)
+            while index < size:
+                value = index
+                chars = [ALPHABET[0]] * length
+                for position in range(length - 1, -1, -1):
+                    value, digit = divmod(value, base)
+                    chars[position] = ALPHABET[digit]
+                name = "".join(chars)
+                index += 1
+                if ".." not in name:
+                    return name, offset + index
+            offset += size
+        return None
+
+    assert preferences is not None
