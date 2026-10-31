@@ -226,3 +226,63 @@ class RequestBudget:
     def from_dict(cls, data: dict[str, Any] | None) -> RequestBudget:
         if not data or not isinstance(data, dict):
             return cls()
+        for key in ("max_network_requests", "max_definitive_checks", "max_duration_seconds", "max_consecutive_failures"):
+            if isinstance(data.get(key), bool):
+                raise ValueError(f"Budget field '{key}' cannot be a boolean.")
+        return cls(
+            max_network_requests=int(data["max_network_requests"])
+            if data.get("max_network_requests") is not None
+            else None,
+            max_definitive_checks=int(data["max_definitive_checks"])
+            if data.get("max_definitive_checks") is not None
+            else None,
+            max_duration_seconds=float(data["max_duration_seconds"])
+            if data.get("max_duration_seconds") is not None
+            else None,
+            max_consecutive_failures=int(data["max_consecutive_failures"])
+            if data.get("max_consecutive_failures") is not None
+            else 3,
+        )
+
+
+@dataclass(frozen=True)
+class ProviderHealth:
+    provider: str
+    state: ProviderHealthState = ProviderHealthState.READY
+    reason: str = ""
+    consecutive_failures: int = 0
+    consecutive_rate_limits: int = 0
+    retry_at: float = 0.0
+    updated_at: str = field(default_factory=utc_now)
+
+    @property
+    def is_circuit_open(self) -> bool:
+        return self.state in (
+            ProviderHealthState.PAUSED_FAILURES,
+            ProviderHealthState.BLOCKED_CHALLENGE,
+            ProviderHealthState.UNINTERPRETABLE_RESPONSE,
+        )
+
+
+@dataclass(frozen=True)
+class RateLimitMetadata:
+    retry_after: float | None = None
+    limit: int | None = None
+    remaining: float | None = None
+    reset_after: float | None = None
+    reset_at: float | None = None
+    bucket: str = ""
+    scope: str = ""
+    is_global: bool = False
+    effective_delay: float = 0.0
+    reason: str = ""
+
+    @property
+    def retry_after_seconds(self) -> float:
+        return self.retry_after if self.retry_after is not None else self.effective_delay
+
+
+@dataclass(frozen=True)
+class RequestDiagnosticEntry:
+    id: int
+    scan_id: str
