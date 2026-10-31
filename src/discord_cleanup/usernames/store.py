@@ -398,3 +398,56 @@ class UsernameScanStore:
                     f"SELECT retry_at, reason FROM username_cooldowns WHERE route IN ({placeholders})",
                     tuple(keys_to_check),
                 ).fetchall()
+                for extra in extra_rows:
+                    r_at = float(extra["retry_at"])
+                    if r_at > best_retry:
+                        best_retry = r_at
+                        best_reason = str(extra["reason"])
+        return best_retry, best_reason
+
+    def save_rate_limit_deadlines(
+        self,
+        route: str,
+        *,
+        scope: str = PUBLIC_USERNAME_SCOPE,
+        retry_at: float,
+        reason: str,
+        metadata: RateLimitMetadata | None = None,
+    ) -> float:
+        bucket = metadata.bucket if metadata is not None else ""
+        is_global = metadata.is_global if metadata is not None else False
+        self.save_cooldown(
+            route,
+            retry_at,
+            reason,
+            scope=scope,
+            bucket=bucket,
+            is_global=is_global,
+        )
+        return self.cooldown(route, scope=scope, bucket=bucket)[0]
+
+    def save_cooldown(
+        self,
+        route: str,
+        retry_at: float,
+        reason: str,
+        *,
+        scope: str = "",
+        bucket: str = "",
+        is_global: bool = False,
+    ) -> None:
+        if isinstance(retry_at, bool) or not math.isfinite(retry_at) or retry_at < 0:
+            raise ValueError("Invalid username cooldown deadline.")
+        clean_reason = sanitize_token(reason)
+        safe_bucket = sanitize_token(bucket)[:64] if bucket else ""
+        effective_scope = scope or (PUBLIC_USERNAME_SCOPE if "username-attempt-unauthed" in route else "")
+        with self._connect() as connection:
+            self._upsert_cooldown_row(connection, route, retry_at, clean_reason, safe_bucket)
+            if safe_bucket and effective_scope:
+                self._upsert_cooldown_row(
+                    connection, f"bucket:{effective_scope}:{safe_bucket}", retry_at, clean_reason, safe_bucket
+                )
+            if is_global and effective_scope:
+                self._upsert_cooldown_row(
+                    connection, f"global:{effective_scope}", retry_at, f"Global rate limit ({clean_reason})", ""
+                )
