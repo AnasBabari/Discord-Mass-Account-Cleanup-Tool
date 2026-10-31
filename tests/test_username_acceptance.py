@@ -1025,3 +1025,63 @@ def test_multiprocess_killed_holder_lock_recovery_and_interrupted_v1_v2_migratio
     # Interrupted migration recovery test on v1 and v2 fixtures
     for start_version in (1, 2):
         mig_db = tmp_path / f"interrupted_v{start_version}.sqlite3"
+        with sqlite3.connect(mig_db) as conn:
+            conn.executescript(
+                f"""
+                PRAGMA user_version = {start_version};
+                CREATE TABLE scans (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    lengths TEXT NOT NULL,
+                    names TEXT NOT NULL,
+                    cursor INTEGER NOT NULL DEFAULT 0,
+                    total INTEGER NOT NULL,
+                    checked INTEGER NOT NULL DEFAULT 0,
+                    available INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'paused',
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    generator_version INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE results (
+                    scan_id TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    checked_at TEXT NOT NULL,
+                    message TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (scan_id, username)
+                );
+                CREATE TABLE scanner_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                INSERT INTO scans VALUES (
+                    's1', 'public:discord', 'custom', '[3]', '["aaa","bbb","ccc"]',
+                    3, 3, 3, 2, 'completed', '',
+                    '2026-10-31T09:00:00+00:00', '2026-10-31T09:00:00+00:00', 1
+                );
+                INSERT INTO results VALUES ('s1', 'aaa', 'available', '2026-10-31T09:00:00+00:00', '');
+                INSERT INTO results VALUES ('s1', 'bbb', 'available', '2026-10-31T09:00:01+00:00', '');
+                INSERT INTO results VALUES ('s1', 'ccc', 'unavailable', '2026-10-31T09:00:02+00:00', '');
+                -- Simulate an interrupted v3 migration that checkpointed after rowid 1
+                INSERT INTO scanner_meta VALUES ('backfill_v3_last_rowid', '1', '2026-10-31T09:00:02+00:00');
+                """
+            )
+        resumed_store = UsernameScanStore(mig_db)
+        with sqlite3.connect(mig_db) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        # Rowids 2 ("bbb") and 3 ("ccc") must have been backfilled from the resumed checkpoint!
+        assert resumed_store.get_cached_observation("bbb", scope=PUBLIC_USERNAME_SCOPE, now=1793437205.0) is not None
+        assert resumed_store.get_cached_observation("ccc", scope=PUBLIC_USERNAME_SCOPE, now=1793437205.0) is not None
+
+
+# ===========================================================================
+# Section 7 & 8: Complete Desktop Workflow, UI State Inspection & Benchmarks
+# ===========================================================================
+
+
+def test_complete_desktop_public_workflow_and_ui_states(qtbot: Any, monkeypatch: Any, tmp_path: Path) -> None:
+    """End-to-end desktop workflow from LoginPage entry point through preview, budget, pause, resume, and states."""
