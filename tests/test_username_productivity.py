@@ -1038,3 +1038,58 @@ def test_max_network_requests_budget_of_one_stops_after_single_transport_attempt
         store, transport=transport, min_interval=0, max_network_retries=3, clock=clock, wait=clock.wait
     )
     scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc", "def"])
+
+    res = scanner.run(scan.id, PUBLIC_USERNAME_SCOPE, budget=RequestBudget(max_network_requests=1))
+    # Exactly 1 HTTP attempt was made; retry was NOT dispatched because budget=1 was exhausted!
+    assert transport.request.call_count == 1
+    assert res.status == "paused"
+    assert res.checked == 0
+    assert res.cursor == 0
+    assert "budget" in res.pause_reason.lower()
+    diag = store.diagnostics_summary(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert diag.network_requests_total == 1
+    assert diag.definitive_network_checks == 0
+
+
+def test_budget_and_policy_validation_rejects_invalid_values():
+    for bad in (True, False, 0, -1, -5, "1"):
+        with pytest.raises((ValueError, TypeError)):
+            RequestBudget(max_network_requests=bad)  # type: ignore[arg-type]
+        with pytest.raises((ValueError, TypeError)):
+            RequestBudget(max_definitive_checks=bad)  # type: ignore[arg-type]
+    for bad_dur in (True, False, 0.0, -0.5, float("nan"), float("inf"), float("-inf")):
+        with pytest.raises((ValueError, TypeError)):
+            RequestBudget(max_duration_seconds=bad_dur)  # type: ignore[arg-type]
+        with pytest.raises((ValueError, TypeError)):
+            CacheFreshnessPolicy(available_ttl_seconds=bad_dur)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        CandidatePreferences(strategy="invalid_strategy")
+    with pytest.raises(ValueError):
+        CandidatePreferences(charset_mode="invalid_charset")
+    with pytest.raises(ValueError):
+        CandidatePreferences(seed=True)  # type: ignore[arg-type]
+
+
+def test_force_recheck_does_not_reuse_pre_existing_cache(tmp_path):
+    clock = FakeClock(5000.0)
+    store = UsernameScanStore(tmp_path / "force_recheck.db", clock=clock)
+    # Pre-existing fresh observation at t=4995 (5 seconds before scan starts at t=5000)
+    store.save_cached_observation(
+        UsernameCheckResult("abc", UsernameStatus.UNAVAILABLE, format_utc_timestamp(4995.0)),
+        provider="public",
+        scope=PUBLIC_USERNAME_SCOPE,
+        now=4995.0,
+    )
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(json_data={"taken": False})
+    client = PublicUsernameClient(store, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    res = scanner.run(scan.id, PUBLIC_USERNAME_SCOPE, use_cache=False, force_recheck=True)
+    assert res.status == "completed"
+    assert res.available == 1
+    assert res.network_checks == 1
+    assert res.cache_hits == 0
+    assert transport.request.call_count == 1
