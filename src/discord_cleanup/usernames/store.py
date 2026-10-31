@@ -1453,3 +1453,7 @@ class UsernameScanStore:
         if destination in protected or is_scan_lock:
             raise ValueError("Choose an export file different from the scan database.")
         temporary: Path | None = None
+        try:
+            pass
+        finally:
+            pass
