@@ -1149,3 +1149,63 @@ def test_custom_safety_margin_bucket_isolation_and_monotonic_deadline_sync(tmp_p
         MockResponse(json_data={"taken": True}),
     ]
     # Custom safety_margin=1.5 with jitter=0 -> wait should be 10.0 + 1.5 = 11.5s (not 10.25s!)
+    client = PublicUsernameClient(
+        store,
+        transport=transport,
+        min_interval=0.0,
+        safety_margin=1.5,
+        jitter=0.0,
+        clock=clock,
+        wait=clock.wait,
+    )
+    client.check_username_availability("abc")
+    assert clock.now == pytest.approx(1011.5)
+
+    # Bucket isolation: a bucket cooldown on route A does NOT block route B unless global or shared bucket
+    meta_bucket_only = parse_rate_limit_metadata(
+        {"X-RateLimit-Bucket": "bucket-route-a", "Retry-After": "60"},
+        {"retry_after": 60, "global": False},
+        now=2000.0,
+    )
+    store.save_rate_limit_deadlines(
+        "https://discord.com/api/v10/route-a",
+        scope=PUBLIC_USERNAME_SCOPE,
+        retry_at=2060.0,
+        reason="Rate limited",
+        metadata=meta_bucket_only,
+    )
+    assert store.cooldown("https://discord.com/api/v10/route-a", scope=PUBLIC_USERNAME_SCOPE)[0] == pytest.approx(2060.0)
+    assert store.cooldown("https://discord.com/api/v10/route-b", scope=PUBLIC_USERNAME_SCOPE)[0] == 0.0
+
+    # External process extending SQLite deadline updates in-process monotonic wait
+    clock.now = 3000.0
+    store.save_cooldown(PUBLIC_CHECK_URL, 3010.0, "Rate limited")
+    assert client._remaining_cooldown()[0] == pytest.approx(10.0)
+    # External process extends SQLite deadline to 3050.0
+    store.save_cooldown(PUBLIC_CHECK_URL, 3050.0, "Rate limited")
+    assert client._remaining_cooldown()[0] == pytest.approx(50.0)
+
+
+def test_diagnostics_retention_preserves_cumulative_counters_and_excludes_idle_gaps(tmp_path):
+    clock = FakeClock(1000.0)
+    store = UsernameScanStore(tmp_path / "diag_trim.db", max_diagnostics_rows=10, clock=clock)
+    for i in range(15):
+        # 15 checks, each taking 2s active window, separated by a 1000s idle gap between check 5 and check 6
+        if i == 6:
+            clock.now += 1000.0
+        start = clock.now
+        clock.now += 2.0
+        store.record_diagnostic(
+            scope=PUBLIC_USERNAME_SCOPE,
+            provider="public",
+            route=PUBLIC_CHECK_URL,
+            username=f"u{i:02d}",
+            origin="network",
+            http_status=200 if i < 12 else 400,
+            started_at=start,
+            completed_at=clock.now,
+            wait_seconds=0.5,
+            classification="available" if i == 0 else ("syntax_rejected" if i >= 12 else "unavailable"),
+        )
+
+    summary = store.diagnostics_summary(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
