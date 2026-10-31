@@ -344,3 +344,62 @@ def test_leader_long_deadline_completes_while_follower_short_deadline_expires(tm
             budget=RequestBudget(max_duration_seconds=2.0),
         )
         time.sleep(0.02)
+        fut_b = pool.submit(
+            scanner_b.run,
+            scan_b.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_duration_seconds=0.06),
+        )
+        res_b = fut_b.result(timeout=1.0)
+        res_a = fut_a.result(timeout=2.0)
+
+    assert res_b.status == "paused"
+    assert res_b.checked == 0
+    assert res_b.cursor == 0
+    assert res_b.network_checks == 0
+    assert "duration budget" in res_b.pause_reason.lower()
+
+    assert res_a.status == "completed"
+    assert res_a.checked == 1
+    assert res_a.available == 1
+    assert res_a.network_checks == 1
+    assert transport.request.call_count == 1
+    assert wait_for_active_shared_requests(timeout=1.0) is True
+
+
+def test_all_consumers_expire_or_cancel_during_cooldown_dispatches_zero_requests(tmp_path: Path) -> None:
+    """When all consumers on a shared candidate expire or cancel during a cooldown, 0 HTTP requests are made."""
+    store = UsernameScanStore(tmp_path / "all_expire_cooldown.db")
+    store.save_cooldown(PUBLIC_CHECK_URL, time.time() + 0.60, "Rate limited")
+
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(status_code=200, json_data={"taken": False})
+
+    client_a = PublicUsernameClient(store, transport=transport, min_interval=0.0)
+    client_b = PublicUsernameClient(store, transport=transport, min_interval=0.0)
+    scanner_a = UsernameScanner(store, client_a)
+    scanner_b = UsernameScanner(store, client_b)
+
+    scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    cancel_b = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(
+            scanner_a.run,
+            scan_a.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_duration_seconds=0.06),
+        )
+        time.sleep(0.02)
+        fut_b = pool.submit(
+            scanner_b.run,
+            scan_b.id,
+            PUBLIC_USERNAME_SCOPE,
+            cancel_b,
+            budget=RequestBudget(max_duration_seconds=2.0),
+        )
+        time.sleep(0.05)
+        cancel_b.set()
+        res_a = fut_a.result(timeout=1.0)
+        res_b = fut_b.result(timeout=1.0)
