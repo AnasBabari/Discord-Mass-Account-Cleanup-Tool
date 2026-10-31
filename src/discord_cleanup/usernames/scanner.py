@@ -716,3 +716,49 @@ class UsernameScanner:
             if (budget is not None and budget.max_duration_seconds is not None)
             else None
         )
+        max_consec_fail = (
+            budget.max_consecutive_failures
+            if (budget is not None and budget.max_consecutive_failures is not None)
+            else 3
+        )
+
+        def can_dispatch_network() -> bool:
+            if not run_active or cancel_event.is_set():
+                return False
+            if self._is_deadline_expired(max_wait_deadline_mono):
+                return False
+            if budget is not None and budget.max_network_requests is not None:
+                return (network_requests_this_run + reserved_network_requests) < budget.max_network_requests
+            return True
+
+        def try_reserve_network() -> bool:
+            nonlocal reserved_network_requests
+            if not can_dispatch_network():
+                return False
+            reserved_network_requests += 1
+            return True
+
+        def release_reserved_network() -> None:
+            nonlocal reserved_network_requests
+            reserved_network_requests = max(0, reserved_network_requests - 1)
+
+        def commit_reserved_network() -> None:
+            nonlocal reserved_network_requests, network_requests_this_run
+            reserved_network_requests = max(0, reserved_network_requests - 1)
+            network_requests_this_run += 1
+            self.store.increment_scan_network_checks(scan_id, 1)
+
+        def notify(message: str = "", result: UsernameCheckResult | None = None) -> None:
+            if on_progress is not None:
+                try:
+                    health = self.store.get_provider_health(account_id, route=route_url, now=self.clock())
+                    diag = self.store.diagnostics_summary(
+                        account_id,
+                        remaining_candidates=max(0, scan.total - scan.checked),
+                        route=route_url,
+                        now=self.clock(),
+                    )
+                    on_progress(UsernameProgress(scan, candidate, result, message, health=health, diagnostics=diag))
+                except Exception:
+                    # A presentation failure must not overwrite a committed availability result.
+                    logger.warning("Username progress callback failed; saved scan state is intact.")
