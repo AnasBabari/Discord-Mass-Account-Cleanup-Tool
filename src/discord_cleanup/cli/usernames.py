@@ -347,7 +347,64 @@ def run_username_checker(
                 "\n  [1] Exhaustive search\n  [2] Custom list\n  [3] Resume saved scan\n  [4] View available names\n  [5] Export results CSV\n  [6] Strategy / Pattern / Seeded search\n  [7] Watchlist\n  [8] Fresh live recheck\n  [9] Diagnostics & health\n  [Q] Back"
             )
             try:
-                pass
+                choice = input("Username option: ").strip().lower()
+                if choice == "q":
+                    return
+                scan = None
+                budget: RequestBudget | None = None
+                force_recheck = False
+                if choice == "1":
+                    length_choice = input("Lengths [3 / 4 / both (default)]: ").strip().lower()
+                    if length_choice not in ("", "both", "3", "4"):
+                        print("Choose 3, 4, or both.")
+                        continue
+                    lengths = (int(length_choice),) if length_choice in ("3", "4") else (3, 4)
+                    scan = store.create_scan(account_id, lengths=lengths)
+                    print(
+                        f"{scan.total:,} candidates. Discord sets the rate; exhaustive scans can take a long time. Ctrl+C pauses and saves progress."
+                    )
+                elif choice == "2":
+                    print(
+                        "Paste names separated by spaces or commas. Multiple lines are supported; finish with a blank line."
+                    )
+                    lines = []
+                    while line := input():
+                        lines.append(line)
+                    names = parse_custom_names("\n".join(lines))
+                    if not names:
+                        print("No usernames entered.")
+                        continue
+                    scan = store.create_scan(account_id, mode="custom", names=names)
+                elif choice in ("3", "4", "5"):
+                    scan = _choose_scan(store, account_id)
+                    if scan is None:
+                        continue
+                    if choice == "4":
+                        _show_results(store, scan, account_id)
+                        continue
+                    if choice == "5":
+                        path = input("Export CSV path (blank to cancel): ").strip()
+                        if path:
+                            store.export_csv(scan.id, account_id, path)
+                            print(f"Exported results to {path}")
+                        continue
+                elif choice == "6":
+                    length_choice = input("Lengths [3 / 4 / both (default)]: ").strip().lower()
+                    lengths = (int(length_choice),) if length_choice in ("3", "4") else (3, 4)
+                    strategy = (
+                        input("Strategy [exhaustive / randomized / priority (default randomized)]: ").strip().lower()
+                        or "randomized"
+                    )
+                    if strategy not in ("exhaustive", "randomized", "priority"):
+                        print("Choose exhaustive, randomized, or priority.")
+                        continue
+                    charset = (
+                        input("Charset [all / letters / alphanumeric / no_punctuation (default all)]: ").strip().lower()
+                        or "all"
+                    )
+                    if charset not in ("all", "letters", "alphanumeric", "no_punctuation"):
+                        print("Choose all, letters, alphanumeric, or no_punctuation.")
+                        continue
             except (KeyboardInterrupt, EOFError):
                 pass
             except Exception as exc:
