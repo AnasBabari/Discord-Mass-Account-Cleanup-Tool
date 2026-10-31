@@ -1,6 +1,6 @@
 # Discord Mass Account Cleanup Tool
 
-A robust, asynchronous desktop application and command-line utility built with Python and PyQt5 for inspecting and bulk-managing Discord servers, relationships, and notification read-states.
+A robust, asynchronous desktop application and command-line utility built with Python and PyQt5 for inspecting and bulk-managing Discord servers, relationships, and notification read-states, and checking short username availability.
 
 Designed with a strict multi-layered architecture, coordinated rate-limiting backoff, cooperative cancellation, adversarial credential redaction, and deterministic offline unit testing.
 
@@ -15,7 +15,7 @@ Designed with a strict multi-layered architecture, coordinated rate-limiting bac
 - **Adversarial Credential Security**: Multi-pattern token sanitization regex engine scrubs user tokens, MFA secrets, and Authorization headers across CLI prompts, stream interceptors, crash logs, and exported diagnostic files. Tokens are stored encrypted via the OS Keyring (`keyring`) and scrubbed from worker memory immediately upon task completion.
 - **Fail-Safe Destructive Action Workflows**: Two-step verification workflows require explicit user selection, summary previews (displaying target counts and names), and confirmation dialogs before executing irreversible actions (such as leaving servers or deleting friendships).
 - **Clean Transport Abstraction**: Fully modular HTTP transport layer built on standard protocols without browser fingerprinting, evasion tricks, or brittle global mocking hooks.
-- **Comprehensive Offline Test Suite**: 100+ unit and component tests achieving ~79% statement coverage across domain models, rate limiting, network transports, worker lifecycle states, and PyQt UI pages using mocked fixtures with zero live Discord API calls.
+- **Comprehensive Offline Test Suite**: 150+ unit and component tests covering domain models, rate limiting, network transports, resumable username scans, worker lifecycle states, and PyQt UI pages using mocked fixtures with zero live Discord API calls.
 - **Automated CI/CD Pipeline**: GitHub Actions workflow running automated lint checks (`Ruff`), static type checking (`Mypy`), cross-platform matrix testing on Ubuntu & Windows, and automated Windows executable releases with SHA256 checksums.
 
 ---
@@ -69,7 +69,7 @@ Designed with a strict multi-layered architecture, coordinated rate-limiting bac
 > This tool automates operations through standard user-account HTTP endpoints. User-token automation is not officially supported by Discord and may violate Discord's Terms of Service.
 >
 > - **No Circumvention**: This application does **not** employ browser fingerprint evasion, CAPTCHA bypasses, anti-bot circumvention, or hidden automation stealth.
-> - **Honest Error Handling**: If Discord responds with `401 Unauthorized`, `429 Rate Limited`, or `403 Forbidden`, the application reports the status honestly and halts gracefully rather than attempting to bypass platform protections.
+> - **Honest Error Handling**: Authentication and access failures are reported honestly. HTTP `429` responses honor Discord's retry deadline; public checks save that deadline across restarts. Unverified responses are never reported as available names.
 > - **Intended Use**: For personal account auditing, server pruning, and relationship cleanup on accounts you control.
 
 ---
