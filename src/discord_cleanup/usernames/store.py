@@ -339,3 +339,62 @@ class UsernameScanStore:
                             "network",
                         ),
                     )
+                    if not existing_exp_str or not row["provider"]:
+                        connection.execute(
+                            "UPDATE results SET provider=?, expires_at=? WHERE scan_id=? AND username=?",
+                            (provider, exp_at, str(row["scan_id"]), str(row["username"])),
+                        )
+
+                connection.execute(
+                    "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('backfill_v3_last_rowid', ?)",
+                    (str(max_rowid),),
+                )
+                if len(rows) < MIGRATION_BATCH_SIZE:
+                    connection.execute(
+                        "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('migration_v3_complete', '1')"
+                    )
+                    connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                    break
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(self.path, timeout=5.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    def lock(self, scan_id: str) -> FileLock:
+        # Database IDs must never be usable as filesystem paths.
+        if str(uuid.UUID(scan_id)) != scan_id:
+            raise ValueError("Invalid scan ID.")
+        return FileLock(str(self.path) + f".{scan_id}.lock", timeout=0)
+
+    def public_request_lock(self) -> FileLock:
+        return FileLock(str(self.path) + ".public-request.lock", timeout=0)
+
+    def candidate_inflight_lock(self, scope: str, username: str) -> FileLock:
+        digest = hashlib.blake2s(f"{scope}:{username.lower()}".encode(), digest_size=8).hexdigest()
+        return FileLock(str(self.path) + f".inflight.{digest}.lock", timeout=0)
+
+    def cooldown(self, route: str, *, scope: str = "", bucket: str = "") -> tuple[float, str]:
+        effective_scope = scope or (PUBLIC_USERNAME_SCOPE if "username-attempt-unauthed" in route else "")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT retry_at, reason, bucket FROM username_cooldowns WHERE route=?", (route,)
+            ).fetchone()
+            best_retry = float(row["retry_at"]) if row is not None else 0.0
+            best_reason = str(row["reason"]) if row is not None else ""
+            route_bucket = bucket or (str(row["bucket"]) if row is not None and row["bucket"] else "")
+            if effective_scope:
+                keys_to_check = [f"global:{effective_scope}"]
+                if route_bucket:
+                    keys_to_check.append(f"bucket:{effective_scope}:{route_bucket}")
+                placeholders = ",".join("?" for _ in keys_to_check)
+                extra_rows = connection.execute(
+                    f"SELECT retry_at, reason FROM username_cooldowns WHERE route IN ({placeholders})",
+                    tuple(keys_to_check),
+                ).fetchall()
