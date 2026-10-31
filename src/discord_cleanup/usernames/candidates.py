@@ -530,3 +530,58 @@ def preview_candidates(
         if prefs.strategy == "priority":
             raw_names = rank_candidates_by_preference(raw_names)
         valid_sample: list[str] = []
+        invalid_entries: list[tuple[str, str]] = []
+        for name in raw_names:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RequestCancelledError("Candidate preview cancelled.")
+            err = validate_username(name)
+            if err:
+                invalid_entries.append((name, err))
+            elif len(valid_sample) < limit:
+                valid_sample.append(name)
+        desc = (
+            f"Custom list ({len(raw_names):,} unique entries; {len(invalid_entries):,} invalid filtered locally). "
+            + (
+                "Ordered by preference heuristic (3-char & readable handles first; heuristic only, not availability probability)."
+                if prefs.strategy == "priority"
+                else "Checked in input order."
+            )
+        )
+        return CandidatePreview(
+            total_candidates=len(raw_names),
+            sample_candidates=valid_sample,
+            invalid_candidates=invalid_entries,
+            strategy_description=desc,
+        )
+
+    validated = validate_lengths(lengths)
+    _, invalid_priority = _normalize_priority_entries(validated, prefs)
+    total = candidate_count(validated, prefs, cancel_event=cancel_event)
+    sample: list[str] = []
+    if total > 0:
+        cursor = 0
+        while len(sample) < limit:
+            nxt = next_generated_candidate(validated, cursor, prefs, cancel_event=cancel_event)
+            if nxt is None:
+                break
+            candidate, cursor = nxt
+            if not validate_username(candidate):
+                sample.append(candidate)
+
+    strategy_label = (
+        f"Randomized without replacement (seed={prefs.seed})"
+        if prefs.strategy == "randomized"
+        else "Priority list + exhaustive traversal"
+        if prefs.priority_names
+        else "Exhaustive lexicographical traversal"
+    )
+    desc = (
+        f"{strategy_label} · charset={prefs.charset_mode} · pattern={prefs.pattern or 'any'} · "
+        f"{total:,} valid candidates. Preference filters reduce wasted requests but do not predict server availability."
+    )
+    return CandidatePreview(
+        total_candidates=total,
+        sample_candidates=sample,
+        invalid_candidates=invalid_priority,
+        strategy_description=desc,
+    )
