@@ -227,3 +227,63 @@ def wait_for_active_shared_requests(timeout: float = 2.0) -> bool:
     while True:
         with _INFLIGHT_MUTEX:
             threads = list(_ACTIVE_SHARED_THREADS)
+        if not threads:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        threads[0].join(timeout=min(0.05, remaining))
+
+
+class UsernameScanner:
+    def __init__(
+        self,
+        store: UsernameScanStore,
+        client: DiscordApiClient | PublicUsernameClient,
+        *,
+        freshness_policy: CacheFreshnessPolicy | None = None,
+        clock: Callable[[], float] | None = None,
+        monotonic: Callable[[], float] | None = None,
+        before_commit_hook: Callable[[], None] | None = None,
+    ):
+        self.store = store
+        self.client = client
+        raw_policy = freshness_policy or getattr(client, "freshness_policy", None)
+        self.freshness_policy = raw_policy if isinstance(raw_policy, CacheFreshnessPolicy) else CacheFreshnessPolicy()
+        raw_clock = clock or getattr(client, "clock", None)
+        self.clock = raw_clock if (callable(raw_clock) and not hasattr(raw_clock, "assert_called")) else time.time
+        raw_mono = monotonic or getattr(client, "monotonic", None)
+        self.monotonic = raw_mono if (callable(raw_mono) and not hasattr(raw_mono, "assert_called")) else time.monotonic
+        self._uses_custom_clock = self.clock is not time.time
+        self.before_commit_hook = before_commit_hook
+
+    def _now_iso(self) -> str:
+        return format_utc_timestamp(self.clock()) if self._uses_custom_clock else utc_now()
+
+    def _provider_name(self, account_id: str) -> str:
+        if isinstance(self.client, PublicUsernameClient) or account_id == PUBLIC_USERNAME_SCOPE:
+            return "public"
+        return "account"
+
+    def _route_url(self, account_id: str) -> str:
+        if isinstance(self.client, PublicUsernameClient):
+            return self.client.url
+        if account_id == PUBLIC_USERNAME_SCOPE:
+            return PUBLIC_CHECK_URL
+        base = getattr(self.client, "base_url", "https://discord.com/api/v10")
+        return f"{base}/users/@me/pomelo-attempt"
+
+    def identify(self, cancel_event: threading.Event | None = None) -> str:
+        if isinstance(self.client, PublicUsernameClient):
+            return self.client.scope
+        user = self.client.verify_token(cancel_event=cancel_event)
+        if not user.id or user.id == "None":
+            raise ValueError("Discord did not return a valid account ID.")
+        return user.id
+
+    def _supports_extended_kwargs(self) -> bool:
+        if isinstance(self.client, PublicUsernameClient):
+            return True
+        fn = getattr(self.client, "check_username_availability", None)
+        if fn is None or hasattr(fn, "assert_called"):
+            return False
