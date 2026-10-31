@@ -465,13 +465,63 @@ def run_username_checker(
                     force_recheck = True
                 elif choice == "9":
                     _print_diagnostics(store, account_id, route)
+                    sub = input("Enter r to reset provider circuit breaker, or Enter to return: ").strip().lower()
+                    if sub == "r":
+                        health = store.reset_provider_health(account_id, route=route)
+                        print(f"Provider health state: {health.state.label} (active server cooldowns preserved).")
+                    continue
+                else:
+                    print("Choose an option from the menu.")
+                    continue
+
+                last_wait_notice = -float("inf")
+
+                def report(progress: UsernameProgress) -> None:
+                    nonlocal last_wait_notice
+                    if progress.result is not None and progress.result.status == UsernameStatus.AVAILABLE:
+                        tag = (
+                            f" ({progress.result.provenance_label()})"
+                            if (progress.result.is_cached or progress.result.is_stale)
+                            else ""
+                        )
+                        print(f"AVAILABLE: {progress.result.username} | {progress.result.checked_at}{tag}", flush=True)
+                    elif progress.message.startswith("Rate limited"):
+                        if time.monotonic() - last_wait_notice >= 15:
+                            print(progress.message, flush=True)
+                            last_wait_notice = time.monotonic()
+                    elif progress.result is not None and progress.scan.checked % 100 == 0:
+                        print(
+                            f"{progress.scan.checked:,}/{progress.scan.total:,} checked; {progress.scan.available:,} available",
+                            flush=True,
+                        )
+
+                final = scanner.run(
+                    scan.id,
+                    account_id,
+                    on_progress=report,
+                    budget=budget,
+                    use_cache=not force_recheck,
+                    force_recheck=force_recheck,
+                )
+                print(f"Scan {final.status}: {final.checked:,}/{final.total:,} checked, {final.available:,} available.")
+                if final.error:
+                    print(final.error)
             except (KeyboardInterrupt, EOFError):
-                pass
+                print("\nReturning to the main menu. Completed checks are saved.")
+                return
             except Exception as exc:
-                pass
+                message = sanitize_token(str(exc))
+                if owned_client is not None and owned_client.token:
+                    message = message.replace(owned_client.token, "[REDACTED_TOKEN]")
+                print(f"Username checker: {message}")
     except (KeyboardInterrupt, EOFError):
-        pass
+        print("\nReturning to the main menu.")
     except Exception as exc:
-        pass
+        message = sanitize_token(str(exc))
+        if owned_client is not None and owned_client.token:
+            message = message.replace(owned_client.token, "[REDACTED_TOKEN]")
+        print(f"Unable to open username checker: {message}")
     finally:
-        pass
+        if owned_client is not None:
+            owned_client.clear_token()
+        transport.close()
