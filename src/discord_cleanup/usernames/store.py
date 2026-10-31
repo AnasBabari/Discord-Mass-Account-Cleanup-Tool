@@ -1096,3 +1096,61 @@ class UsernameScanStore:
         except (ValueError, TypeError):
             data = {}
         return CandidatePreferences.from_dict(data)
+
+    def preview_scan_candidates(
+        self,
+        mode: str = "generated",
+        lengths: tuple[int, ...] = (3, 4),
+        names: list[str] | None = None,
+        preferences: CandidatePreferences | None = None,
+        limit: int = 20,
+    ) -> CandidatePreview:
+        return preview_candidates(
+            mode=mode,
+            lengths=lengths,
+            custom_names=names,
+            preferences=preferences,
+            limit=limit,
+        )
+
+    def add_watchlist(self, account_id: str, names: list[str], notes: str = "") -> list[str]:
+        if not account_id:
+            raise ValueError("Account scope is required.")
+        added: list[str] = []
+        now = utc_now()
+        clean_notes = sanitize_token(notes)[:120]
+        with self._connect() as connection:
+            for raw in names:
+                name = sanitize_token(raw).strip().lower().removeprefix("@")
+                if not name or validate_username(name):
+                    continue
+                connection.execute(
+                    "INSERT INTO watchlist (account_id, username, added_at, notes) VALUES (?,?,?,?) "
+                    "ON CONFLICT(account_id, username) DO UPDATE SET notes=excluded.notes",
+                    (account_id, name, now, clean_notes),
+                )
+                added.append(name)
+        return added
+
+    def watchlist_candidates(
+        self,
+        account_id: str,
+        *,
+        provider: str = "public",
+        stale_only: bool = True,
+        now: float | None = None,
+    ) -> list[str]:
+        """Return watchlist usernames ordered with unobserved or stale observations first."""
+        entries = self.list_watchlist(account_id, now=now)
+        unobserved_or_stale: list[str] = []
+        fresh: list[str] = []
+        for item in entries:
+            uname = str(item["username"])
+            res: UsernameCheckResult | None = item.get("result")
+            if res is None or res.is_stale:
+                unobserved_or_stale.append(uname)
+            else:
+                fresh.append(uname)
+        if stale_only:
+            return unobserved_or_stale
+        return unobserved_or_stale + fresh
