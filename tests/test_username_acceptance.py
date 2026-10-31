@@ -1196,3 +1196,55 @@ def test_performance_and_memory_benchmarks_with_representative_workloads(tmp_pat
     big_scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=big_names)
     now_iso = format_utc_timestamp(clock.now)
     exp_iso = format_utc_timestamp(clock.now + 900.0)
+    with store._connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO results (scan_id, username, status, checked_at, message, origin, provider, expires_at, reused_at)
+            VALUES (?, ?, ?, ?, '', 'network', 'public', ?, '')
+            """,
+            [
+                (big_scan.id, name, "available" if idx % 5 == 0 else "unavailable", now_iso, exp_iso)
+                for idx, name in enumerate(big_names)
+            ],
+        )
+        conn.execute("UPDATE scans SET checked = 2500, available = 500, status = 'completed' WHERE id = ?", (big_scan.id,))
+
+    t0 = time.perf_counter()
+    page_rows, total_avail = store.results(
+        big_scan.id, PUBLIC_USERNAME_SCOPE, available_only=True, offset=200, limit=100, fresh_only=True, now=clock.now
+    )
+    pagination_ms = (time.perf_counter() - t0) * 1000.0
+    assert total_avail == 500
+    assert len(page_rows) == 100
+    assert pagination_ms < 100.0
+
+    # 4. Memory use during generated scan stepping across 2,135,677 candidate domain (< 1 MB peak allocation)
+    tracemalloc.start()
+    cur = 0
+    for _ in range(500):
+        step = next_generated_candidate((3, 4), cur, prefs)
+        assert step is not None
+        _, cur = step
+    _, peak_bytes = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert peak_bytes < 1_000_000  # Under 1 MB!
+
+    # 5. Disjoint workload (0% overlap) vs overlapping workload (75% overlap)
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(json_data={"taken": True})
+    client = PublicUsernameClient(store, transport=transport, min_interval=0.0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    disjoint_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["aaa", "aab", "aac", "aad"])
+    disjoint_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["aae", "aaf", "aag", "aah"])
+    res_da = scanner.run(disjoint_a.id, PUBLIC_USERNAME_SCOPE)
+    res_db = scanner.run(disjoint_b.id, PUBLIC_USERNAME_SCOPE)
+    # Disjoint workload: 0 false cache hits; all 8 unique candidates checked live
+    assert res_da.cache_hits == 0 and res_da.network_checks == 4
+    assert res_db.cache_hits == 0 and res_db.network_checks == 4
+
+    overlap_c = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["aaa", "aab", "aae", "aai"])
+    res_oc = scanner.run(overlap_c.id, PUBLIC_USERNAME_SCOPE)
+    # 75% overlapping workload: 3 cache hits ("aaa", "aab", "aae") and only 1 network check ("aai")
+    assert res_oc.cache_hits == 3
+    assert res_oc.network_checks == 1
