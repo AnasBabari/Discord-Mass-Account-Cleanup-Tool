@@ -1154,3 +1154,59 @@ class UsernameScanStore:
         if stale_only:
             return unobserved_or_stale
         return unobserved_or_stale + fresh
+
+    def remove_watchlist(self, account_id: str, username: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM watchlist WHERE account_id=? AND username=?",
+                (account_id, username.strip().lower()),
+            )
+
+    def list_watchlist(self, account_id: str, now: float | None = None) -> list[dict[str, Any]]:
+        current_now = float(self.clock()) if now is None else float(now)
+        provider = "public" if account_id == PUBLIC_USERNAME_SCOPE else "account"
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT username, added_at, notes FROM watchlist WHERE account_id=? ORDER BY added_at, username",
+                (account_id,),
+            ).fetchall()
+        entries: list[dict[str, Any]] = []
+        for row in rows:
+            uname = str(row["username"])
+            cached = self.get_cached_observation(
+                uname, provider=provider, scope=account_id, now=current_now, include_stale=True
+            )
+            entries.append(
+                {
+                    "username": uname,
+                    "added_at": str(row["added_at"]),
+                    "notes": str(row["notes"]),
+                    "result": cached,
+                }
+            )
+        return entries
+
+    def get_scan(self, scan_id: str, account_id: str) -> UsernameScan:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id,account_id,mode,lengths,cursor,total,checked,available,status,error,"
+                "created_at,updated_at,generator_version,strategy,network_checked,cache_hits,"
+                "dedup_hits,pause_reason,config_json FROM scans WHERE id=? AND account_id=?",
+                (scan_id, account_id),
+            ).fetchone()
+        if row is None:
+            raise ValueError("Saved scan not found for this account.")
+        return self._scan(row)
+
+    def list_scans(self, account_id: str) -> list[UsernameScan]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT id,account_id,mode,lengths,cursor,total,checked,available,status,error,"
+                "created_at,updated_at,generator_version,strategy,network_checked,cache_hits,"
+                "dedup_hits,pause_reason,config_json FROM scans WHERE account_id=? ORDER BY updated_at DESC, rowid DESC",
+                (account_id,),
+            ).fetchall()
+        return [self._scan(row) for row in rows]
+
+    def recover_interrupted(self, account_id: str) -> None:
+        """Mark orphaned running scans paused, without disturbing a live writer."""
