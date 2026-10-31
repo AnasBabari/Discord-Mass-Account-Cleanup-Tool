@@ -808,3 +808,58 @@ def test_multiprocess_scan_busy_and_cross_process_candidate_dedup(tmp_path: Path
             transport.close()
         """
     )
+
+    try:
+        # Start Process 1 on scan1 (blocks inside server on first request for "abc")
+        p1 = subprocess.Popen(
+            [sys.executable, "-c", worker_code, str(db_path), server.base_url, scan1.id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert server.first_request_entered.wait(timeout=5.0)
+
+        # Process 2 attempts to run the SAME scan1 while Process 1 holds scan_lock(scan1) -> ScanBusyError!
+        p2_same_scan = subprocess.run(
+            [sys.executable, "-c", worker_code, str(db_path), server.base_url, scan1.id],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=True,
+        )
+        out_p2 = json.loads(p2_same_scan.stdout.strip().splitlines()[-1])
+        assert out_p2["ok"] is False
+        assert out_p2["busy"] is True
+
+        # Process 3 runs scan2 (checking the same candidate "abc") while Process 1 holds candidate_inflight_lock
+        p3_ready = tmp_path / "p3.ready"
+        p3 = subprocess.Popen(
+            [sys.executable, "-c", worker_code, str(db_path), server.base_url, scan2.id, str(p3_ready)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 5.0
+        while not p3_ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert p3_ready.exists()
+        # Give p3 80ms after `p3_ready` to hit `Timeout` on `candidate_inflight_lock`
+        time.sleep(0.08)
+        server.release_first_request.set()
+
+        stdout1, stderr1 = p1.communicate(timeout=5.0)
+        stdout3, stderr3 = p3.communicate(timeout=5.0)
+        assert p1.returncode == 0, stderr1
+        assert p3.returncode == 0, stderr3
+
+        res1 = json.loads(stdout1.strip().splitlines()[-1])
+        res3 = json.loads(stdout3.strip().splitlines()[-1])
+        assert res1["ok"] is True and res1["available"] == 1
+        assert res3["ok"] is True and res3["available"] == 1
+        assert res1["network_checks"] == 1
+        assert res3["network_checks"] == 0
+        assert res3["deduplicated_hits"] == 1
+        # Only 1 HTTP request reached the server across both processes!
+        assert len(server.requests) == 1
+    finally:
+        server.close()
