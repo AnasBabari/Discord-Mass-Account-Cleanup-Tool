@@ -235,3 +235,27 @@ def test_progress_failure_does_not_corrupt_results(scanner, scan_store):
     result = scanner.run(scan.id, "account-one", on_progress=broken_ui)
     assert (result.status, result.checked, result.available) == ("completed", 1, 1)
     assert scan_store.results(scan.id, "account-one")[0][0].status == UsernameStatus.AVAILABLE
+
+
+def test_inconsistent_cursor_is_not_reported_complete(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", lengths=(3,))
+    with sqlite3.connect(scan_store.path) as connection:
+        connection.execute("UPDATE scans SET cursor=? WHERE id=?", (38**3, scan.id))
+    result = scanner.run(scan.id, "account-one")
+    assert result.status == "failed"
+    assert "cursor is inconsistent" in result.error
+
+
+def test_cancelled_export_preserves_existing_file(scanner, scan_store, tmp_path):
+    scan = scan_store.create_scan("account-one", mode="custom", names=["abc"])
+    scanner.run(scan.id, "account-one")
+    output = tmp_path / "existing.csv"
+    output.write_text("keep this file", encoding="utf-8")
+    event = threading.Event()
+    event.set()
+    from discord_cleanup.api.exceptions import RequestCancelledError
+
+    with pytest.raises(RequestCancelledError):
+        scan_store.export_csv(scan.id, "account-one", output, cancel_event=event)
+    assert output.read_text() == "keep this file"
+    assert list(tmp_path.glob(".existing.csv.*.tmp")) == []
