@@ -405,3 +405,62 @@ class UsernameCheckResult:
     def _resolve_now(self, now: float | None = None) -> float:
         if now is not None:
             return float(now)
+        if self._clock is not None:
+            return float(self._clock())
+        return time.time()
+
+    def effective_observed_epoch(self) -> float | None:
+        if self.observed_epoch is not None and math.isfinite(self.observed_epoch):
+            return float(self.observed_epoch)
+        return parse_utc_timestamp(self.checked_at)
+
+    def effective_expires_epoch(self) -> float | None:
+        if self.expires_epoch is not None and math.isfinite(self.expires_epoch):
+            return float(self.expires_epoch)
+        if self.expires_at:
+            return parse_utc_timestamp(self.expires_at)
+        obs = self.effective_observed_epoch()
+        if obs is None:
+            return None
+        if self.status == UsernameStatus.INVALID:
+            return None
+        ttl = (
+            DEFAULT_AVAILABLE_TTL_SECONDS
+            if self.status == UsernameStatus.AVAILABLE
+            else DEFAULT_UNAVAILABLE_TTL_SECONDS
+        )
+        return obs + ttl
+
+    @property
+    def is_cached(self) -> bool:
+        return self.origin in (ObservationOrigin.CACHE.value, ObservationOrigin.STALE_CACHE.value)
+
+    def is_expired(self, now: float | None = None) -> bool:
+        if self.origin == ObservationOrigin.STALE_CACHE.value:
+            return True
+        if self.status == UsernameStatus.ERROR:
+            return False
+        if self.status == UsernameStatus.INVALID:
+            if not self.expires_at and self.expires_epoch is None:
+                return False
+            exp_epoch = self.effective_expires_epoch()
+            if exp_epoch is None:
+                return True
+            return self._resolve_now(now) >= exp_epoch
+
+        obs_epoch = self.effective_observed_epoch()
+        if obs_epoch is None or obs_epoch <= 0.0:
+            return True
+        exp_epoch = self.effective_expires_epoch()
+        if exp_epoch is None or exp_epoch <= 0.0:
+            return True
+        return self._resolve_now(now) >= exp_epoch
+
+    def is_fresh(self, now: float | None = None) -> bool:
+        if self.status == UsernameStatus.ERROR:
+            return False
+        return not self.is_expired(now)
+
+    @property
+    def is_stale(self) -> bool:
+        return self.is_expired()
