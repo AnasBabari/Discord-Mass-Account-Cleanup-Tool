@@ -524,3 +524,62 @@ class UsernamesPage(QWidget):
         self._next_expiry_epoch = None
         self.history_input.clear()
         self.table.setRowCount(0)
+        self.offset = 0
+        self.progress.setValue(0)
+        self.page_label.setText("0 results")
+        self.status_label.setText("Ready. Start a new scan or load saved progress.")
+        self.update_cooldown()
+        self.update_estimate()
+        self.set_busy(False)
+
+    def set_busy(self, busy: bool) -> None:
+        ready = self.provider_input.currentData() == "public" or bool(self.token)
+        mode = self.mode_input.currentData()
+        self.start_btn.setEnabled(ready and not busy)
+        self.refresh_btn.setEnabled(ready and not busy)
+        self.pause_btn.setEnabled(busy)
+        self.resume_btn.setEnabled(not busy and self.scan is not None and self.scan.status != "completed")
+        self.recheck_btn.setEnabled(ready and not busy)
+        self.watchlist_add_btn.setEnabled(not busy)
+        self.reset_health_btn.setEnabled(not busy)
+        self.history_input.setEnabled(not busy)
+        self.provider_input.setEnabled(not busy)
+        self.mode_input.setEnabled(not busy)
+        self.length_input.setEnabled(not busy and mode == "generated")
+        self.strategy_input.setEnabled(not busy and mode in ("generated", "custom"))
+        self.charset_input.setEnabled(not busy and mode == "generated")
+        self.pattern_input.setEnabled(not busy and mode == "generated")
+        self.seed_input.setEnabled(not busy and mode in ("generated", "custom"))
+        self.budget_requests_input.setEnabled(not busy)
+        self.use_cache_checkbox.setEnabled(not busy)
+        self.custom_input.setEnabled(not busy)
+        preparing_results = self.results_worker is not None and self.results_worker.isRunning()
+        self.copy_btn.setEnabled(self.scan is not None and not preparing_results)
+        self.export_btn.setEnabled(self.scan is not None and not preparing_results)
+
+    def _launch(
+        self,
+        mode: str,
+        scan_id: str | None = None,
+        *,
+        force_recheck: bool = False,
+        recheck_names: list[str] | None = None,
+    ) -> None:
+        public = self.provider_input.currentData() == "public"
+        if (not public and not self.token) or (self.worker is not None and self.worker.isRunning()):
+            return
+        session = self._session
+        prefs = self.current_preferences()
+        budget = self.current_budget()
+        use_cache = bool(self.use_cache_checkbox.isChecked()) and not force_recheck
+        worker_kwargs: dict[str, Any] = {}
+        if not prefs.is_default_exhaustive():
+            worker_kwargs["preferences"] = prefs
+        if budget is not None:
+            worker_kwargs["budget"] = budget
+        if not use_cache:
+            worker_kwargs["use_cache"] = False
+        if force_recheck:
+            worker_kwargs["force_recheck"] = True
+        if recheck_names is not None:
+            worker_kwargs["recheck_names"] = recheck_names
