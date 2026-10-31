@@ -566,3 +566,63 @@ class UsernameScanStore:
                 (provider, next_state.value, next_reason, 0, 0, cooldown_at, utc_now(), cooldown_at),
             )
         return self.get_provider_health(provider, route=route, now=current_now)
+
+    def get_cached_observation(
+        self,
+        username: str,
+        provider: str = "public",
+        scope: str = PUBLIC_USERNAME_SCOPE,
+        *,
+        now: float | None = None,
+        include_stale: bool = False,
+    ) -> UsernameCheckResult | None:
+        normalized = username.strip().lower()
+        current_now = float(self.clock()) if now is None else float(now)
+        bound_clock: Callable[[], float] = (lambda: current_now) if now is not None else self.clock
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT username, provider, scope, status, observed_at, observed_epoch, expires_at, expires_epoch, message "
+                "FROM observation_cache WHERE username=? AND provider=? AND scope=?",
+                (normalized, provider, scope),
+            ).fetchone()
+        if row is None:
+            return None
+        status = UsernameStatus(row["status"])
+        if status == UsernameStatus.ERROR:
+            return None
+        obs_epoch = float(row["observed_epoch"])
+        expires_epoch = float(row["expires_epoch"])
+        is_fresh = (obs_epoch > 0.0) and (current_now < expires_epoch)
+        if not is_fresh and not include_stale:
+            return None
+        origin = ObservationOrigin.CACHE.value if is_fresh else ObservationOrigin.STALE_CACHE.value
+        return UsernameCheckResult(
+            username=str(row["username"]),
+            status=status,
+            checked_at=str(row["observed_at"]),
+            message=str(row["message"]),
+            origin=origin,
+            provider=str(row["provider"]),
+            expires_at=str(row["expires_at"]),
+            reused_at=format_utc_timestamp(current_now),
+            observed_epoch=obs_epoch,
+            expires_epoch=expires_epoch,
+            _clock=bound_clock,
+        )
+
+    def save_cached_observation(
+        self,
+        result: UsernameCheckResult,
+        provider: str = "public",
+        scope: str = PUBLIC_USERNAME_SCOPE,
+        *,
+        policy: CacheFreshnessPolicy | None = None,
+        now: float | None = None,
+    ) -> UsernameCheckResult:
+        """Persist a verified observation to the shared cache. Operational errors and cached rows are never re-cached."""
+        bound_clock: Callable[[], float] = (lambda: float(now)) if now is not None else self.clock
+        if result.status == UsernameStatus.ERROR:
+            return result.with_clock(bound_clock)
+        if result.origin in (ObservationOrigin.CACHE.value, ObservationOrigin.STALE_CACHE.value):
+            return result.with_clock(bound_clock)
+        freshness = policy or CacheFreshnessPolicy()
