@@ -64,3 +64,9 @@ class UsernameScanWorker(CancellableTokenWorker):
     def run(self) -> None:
         owned_transport = None
         client = self.client
+        try:
+            pass
+        except Exception as exc:
+            pass
+        finally:
+            pass
