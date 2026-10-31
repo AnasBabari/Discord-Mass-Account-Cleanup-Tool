@@ -463,3 +463,63 @@ def test_two_concurrent_forced_rechecks_share_single_new_observation(tmp_path: P
     store = UsernameScanStore(tmp_path / "two_rechecks.db")
     # Pre-existing cached observation 10s ago saying "abc" is unavailable
     past = time.time() - 10.0
+    store.save_cached_observation(
+        UsernameCheckResult("abc", UsernameStatus.UNAVAILABLE, format_utc_timestamp(past), observed_epoch=past),
+        provider="public",
+        scope=PUBLIC_USERNAME_SCOPE,
+        now=past,
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_live_check(*args: Any, **kwargs: Any) -> MockResponse:
+        entered.set()
+        release.wait(timeout=2.0)
+        return MockResponse(status_code=200, json_data={"taken": False})
+
+    transport = MagicMock()
+    transport.request.side_effect = slow_live_check
+
+    scanner_a = UsernameScanner(store, PublicUsernameClient(store, transport=transport, min_interval=0.0))
+    scanner_b = UsernameScanner(store, PublicUsernameClient(store, transport=transport, min_interval=0.0))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(scanner_a.recheck_names, PUBLIC_USERNAME_SCOPE, ["abc"])
+        assert entered.wait(timeout=1.5)
+        fut_b = pool.submit(scanner_b.recheck_names, PUBLIC_USERNAME_SCOPE, ["abc"])
+        time.sleep(0.04)
+        release.set()
+        res_a = fut_a.result(timeout=2.0)
+        res_b = fut_b.result(timeout=2.0)
+
+    assert transport.request.call_count == 1
+    assert res_a.status == "completed"
+    assert res_b.status == "completed"
+    assert res_a.available == 1
+    assert res_b.available == 1
+    assert res_a.network_checks + res_b.network_checks == 1
+    assert res_a.deduplicated_hits + res_b.deduplicated_hits == 1
+
+
+def test_ordinary_check_joined_by_forced_recheck_enforces_fresh_live_observation(tmp_path: Path) -> None:
+    """An ordinary check waiting on candidate lock joined by a forced recheck rejects older cache and dispatches live."""
+    store = UsernameScanStore(tmp_path / "ordinary_then_recheck.db")
+    older_epoch = time.time() - 5.0
+    store.save_cached_observation(
+        UsernameCheckResult(
+            "abc", UsernameStatus.UNAVAILABLE, format_utc_timestamp(older_epoch), observed_epoch=older_epoch
+        ),
+        provider="public",
+        scope=PUBLIC_USERNAME_SCOPE,
+        now=older_epoch,
+    )
+
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(status_code=200, json_data={"taken": False})
+    scanner_a = UsernameScanner(store, PublicUsernameClient(store, transport=transport, min_interval=0.0))
+    scanner_b = UsernameScanner(store, PublicUsernameClient(store, transport=transport, min_interval=0.0))
+
+    scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+
+    # Hold the candidate lock briefly so Consumer A (with use_cache=False) and Consumer B (force_recheck=True) coalesce
