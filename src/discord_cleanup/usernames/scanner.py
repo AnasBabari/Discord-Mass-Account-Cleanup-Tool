@@ -487,3 +487,61 @@ class UsernameScanner:
                         eff_deadline = shared_entry.effective_deadline_mono()
                         if eff_deadline is not None and self._is_deadline_expired(eff_deadline):
                             raise RequestCancelledError("Active duration budget reached.")
+                        try:
+                            with file_lock:
+                                req_epoch = shared_entry.required_observed_epoch()
+                                if waited_for_process_lock or (shared_entry.allow_cache and req_epoch is None):
+                                    cross_proc_cached = self.store.get_cached_observation(
+                                        normalized, provider=provider, scope=account_id, now=self.clock()
+                                    )
+                                    if cross_proc_cached is not None:
+                                        obs_epoch = cross_proc_cached.effective_observed_epoch()
+                                        acceptable = (req_epoch is None) or (
+                                            obs_epoch is not None and obs_epoch >= req_epoch
+                                        )
+                                        if acceptable:
+                                            return cross_proc_cached, waited_for_process_lock
+                                res = self._dispatch_client_check(
+                                    candidate,
+                                    account_id=account_id,
+                                    scan_id=shared_entry.active_scan_id(fallback=scan_id),
+                                    cancel_event=shared_entry.shared_cancel,
+                                    on_backoff=shared_entry.notify_backoff,
+                                    on_network_request=shared_entry.reserve_and_commit_attempt,
+                                    can_dispatch_network=shared_entry.can_any_active_waiter_dispatch,
+                                    max_wait_deadline_mono=shared_entry.effective_deadline_mono,
+                                )
+                                return res, False
+                        except Timeout:
+                            waited_for_process_lock = True
+                            shared_entry.sync_cancel()
+                            if shared_entry.shared_cancel.is_set():
+                                raise RequestCancelledError("Username check cancelled.") from None
+                            eff_deadline = shared_entry.effective_deadline_mono()
+                            if eff_deadline is not None and self._is_deadline_expired(eff_deadline):
+                                raise RequestCancelledError(
+                                    "Active duration budget reached while waiting for candidate lock."
+                                ) from None
+                            if shared_entry.shared_cancel.wait(timeout=0.05):
+                                raise RequestCancelledError("Username check cancelled.") from None
+
+                def _leader_worker(shared_entry: _InFlightEntry = entry) -> None:
+                    try:
+                        res, cross_dedup = _execute_leader_check(shared_entry)
+                        shared_entry.cross_process_dedup = cross_dedup
+                        shared_entry.result = res
+                    except BaseException as exc:
+                        shared_entry.error = exc
+                    finally:
+                        with _INFLIGHT_MUTEX:
+                            if _INFLIGHT_MAP.get(inflight_key) is shared_entry:
+                                _INFLIGHT_MAP.pop(inflight_key, None)
+                            if shared_entry.worker_thread is not None:
+                                _ACTIVE_SHARED_THREADS.discard(shared_entry.worker_thread)
+                        shared_entry.done.set()
+
+                worker_thread = threading.Thread(target=_leader_worker, daemon=True)
+                entry.worker_thread = worker_thread
+                with _INFLIGHT_MUTEX:
+                    _ACTIVE_SHARED_THREADS.add(worker_thread)
+                worker_thread.start()
