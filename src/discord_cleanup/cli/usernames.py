@@ -251,7 +251,57 @@ def run_username_cli_args(
             print("No candidate usernames provided.")
             return 1
 
+        scan = store.create_scan(
+            account_id,
+            mode=mode,
+            lengths=lengths,
+            names=names,
+            preferences=None if prefs.is_default_exhaustive() else prefs,
+        )
+        budget = RequestBudget(
+            max_network_requests=args.max_network_requests,
+            max_definitive_checks=args.max_definitive_checks,
+            max_duration_seconds=args.max_duration,
+        )
+
+        last_wait_notice = -float("inf")
+
+        def report(progress: UsernameProgress) -> None:
+            nonlocal last_wait_notice
+            if progress.result is not None and progress.result.status == UsernameStatus.AVAILABLE:
+                tag = (
+                    f" ({progress.result.provenance_label()})"
+                    if (progress.result.is_cached or progress.result.is_stale)
+                    else ""
+                )
+                print(f"AVAILABLE: {progress.result.username} | {progress.result.checked_at}{tag}", flush=True)
+            elif progress.message.startswith("Rate limited"):
+                if time.monotonic() - last_wait_notice >= 15:
+                    print(progress.message, flush=True)
+                    last_wait_notice = time.monotonic()
+
+        final = scanner.run(
+            scan.id,
+            account_id,
+            on_progress=report,
+            budget=budget,
+            use_cache=not args.no_cache and not args.force_recheck,
+            force_recheck=args.force_recheck,
+        )
+        print(
+            f"Scan {final.status}: {final.checked:,}/{final.total:,} checked, {final.available:,} available "
+            f"(network={final.network_checks:,}, cached={final.cache_hits:,}, dedup={final.deduplicated_hits:,})."
+        )
+        if final.pause_reason and final.status != "completed":
+            print(f"Pause reason: {final.pause_reason}")
+        if final.error:
+            print(final.error)
+        if args.export_path:
+            store.export_csv(final.id, account_id, args.export_path)
+            print(f"Exported results to {args.export_path}")
+        return 0
     except KeyboardInterrupt:
-        pass
+        print("\nInterrupted; completed checks and cursor are saved.")
+        return 130
     finally:
         pass
