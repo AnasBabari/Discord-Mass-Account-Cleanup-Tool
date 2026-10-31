@@ -58,3 +58,9 @@ class UsernameScanWorker(CancellableTokenWorker):
         self.budget = budget
         self.use_cache = use_cache
         self.force_recheck = force_recheck
+        self.recheck_names = list(recheck_names) if recheck_names else None
+        self.clock = clock
+
+    def run(self) -> None:
+        owned_transport = None
+        client = self.client
