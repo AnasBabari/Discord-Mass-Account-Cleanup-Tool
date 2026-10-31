@@ -1429,3 +1429,27 @@ class UsernameScanStore:
                     if fresh_only and not res.is_fresh(eval_now):
                         continue
                     yield res
+
+    def export_csv(
+        self,
+        scan_id: str,
+        account_id: str,
+        path: str | Path,
+        available_only: bool = False,
+        cancel_event: threading.Event | None = None,
+        *,
+        now: float | None = None,
+    ) -> None:
+        self.get_scan(scan_id, account_id)
+        eval_now = float(self.clock()) if now is None else float(now)
+        destination = Path(path).expanduser().resolve()
+        database = self.path.resolve()
+        protected = {database, Path(str(database) + "-wal"), Path(str(database) + "-shm")}
+        is_scan_lock = (
+            destination.parent == database.parent
+            and destination.name.startswith(database.name + ".")
+            and destination.name.endswith(".lock")
+        )
+        if destination in protected or is_scan_lock:
+            raise ValueError("Choose an export file different from the scan database.")
+        temporary: Path | None = None
