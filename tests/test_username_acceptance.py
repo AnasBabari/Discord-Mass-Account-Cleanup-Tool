@@ -910,3 +910,61 @@ def test_multiprocess_circuit_breaker_blocks_second_process_and_cooldown_extensi
             transport.close()
         """
     )
+
+    try:
+        # 1. Process 1 hits CAPTCHA -> opens BLOCKED_CHALLENGE circuit in SQLite
+        r1 = subprocess.run(
+            [sys.executable, "-c", worker_code, str(db_path), server.base_url, scan1.id],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=True,
+        )
+        d1 = json.loads(r1.stdout.strip().splitlines()[-1])
+        assert d1["status"] == "failed"
+        assert d1["checked"] == 0
+        assert d1["cursor"] == 0
+        assert len(server.requests) == 1
+
+        # 2. Process 2 starts on scan2; open circuit blocks Process 2 before any HTTP call!
+        r2 = subprocess.run(
+            [sys.executable, "-c", worker_code, str(db_path), server.base_url, scan2.id],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=True,
+        )
+        d2 = json.loads(r2.stdout.strip().splitlines()[-1])
+        assert d2["status"] == "failed"
+        assert d2["checked"] == 0
+        assert len(server.requests) == 1  # Still 1: Process 2 made 0 HTTP requests!
+
+        # 3. Reset health, start Process 1 (which sets a 0.35s cooldown right before scanner.run and signals
+        #    `waiting_ready` from `on_backoff`), and extend the cooldown from a second connection while Process 1 waits!
+        server.mode = "available"
+        store.reset_provider_health(PUBLIC_USERNAME_SCOPE, route=server.url)
+        waiting_ready = tmp_path / "p_waiter.waiting"
+
+        p_waiter = subprocess.Popen(
+            [sys.executable, "-c", worker_code, str(db_path), server.base_url, scan1.id, str(waiting_ready)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + 5.0
+        while not waiting_ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert waiting_ready.exists()
+        wait_started_epoch = float(waiting_ready.read_text(encoding="utf-8").strip())
+        extended_target = wait_started_epoch + 0.65
+        # Extend cooldown in SQLite while p_waiter is already inside `_wait_until_ready`
+        UsernameScanStore(db_path).save_cooldown(server.url, extended_target, "Rate limited")
+
+        out_w, err_w = p_waiter.communicate(timeout=5.0)
+        assert p_waiter.returncode == 0, err_w
+        dw = json.loads(out_w.strip().splitlines()[-1])
+        assert dw["status"] == "completed"
+        assert dw["checked"] == 1
+        assert dw["elapsed"] >= 0.58
+    finally:
+        server.close()
