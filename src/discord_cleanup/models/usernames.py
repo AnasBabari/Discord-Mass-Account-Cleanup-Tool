@@ -167,3 +167,62 @@ class CandidatePreferences:
             return cls()
         raw_priority = data.get("priority_names") or ()
         raw_seed = data.get("seed", 42)
+        if isinstance(raw_seed, bool):
+            raise ValueError("Candidate seed must be an integer.")
+        return cls(
+            strategy=str(data.get("strategy", "exhaustive")),
+            charset_mode=str(data.get("charset_mode", "all")),
+            allowed_chars=str(data.get("allowed_chars", "")),
+            pattern=str(data.get("pattern", "any")),
+            seed=int(raw_seed),
+            priority_names=tuple(str(item) for item in raw_priority if item),
+        )
+
+
+def _validate_positive_int_budget(value: Any, label: str) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"Maximum {label} budget must be a positive integer.")
+
+
+def _validate_positive_float_budget(value: Any, label: str) -> None:
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0.0
+    ):
+        raise ValueError(f"Maximum {label} budget must be a finite positive number.")
+
+
+@dataclass(frozen=True)
+class RequestBudget:
+    max_network_requests: int | None = None
+    max_definitive_checks: int | None = None
+    max_duration_seconds: float | None = None
+    max_consecutive_failures: int | None = 3
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        _validate_positive_int_budget(self.max_network_requests, "network requests")
+        _validate_positive_int_budget(self.max_definitive_checks, "definitive checks")
+        _validate_positive_float_budget(self.max_duration_seconds, "active duration")
+        _validate_positive_int_budget(self.max_consecutive_failures, "consecutive failures")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_network_requests": self.max_network_requests,
+            "max_definitive_checks": self.max_definitive_checks,
+            "max_duration_seconds": self.max_duration_seconds,
+            "max_consecutive_failures": self.max_consecutive_failures,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> RequestBudget:
+        if not data or not isinstance(data, dict):
+            return cls()
