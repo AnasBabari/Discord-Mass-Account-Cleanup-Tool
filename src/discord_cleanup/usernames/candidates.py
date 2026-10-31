@@ -174,3 +174,61 @@ def rank_candidates_by_preference(names: list[str]) -> list[str]:
 def _feistel_round(right: int, round_index: int, seed: int) -> int:
     payload = f"{seed}:{round_index}:{right}".encode("ascii")
     digest = hashlib.blake2s(payload, digest_size=4).digest()
+    return int.from_bytes(digest, "big")
+
+
+def permute_index(index: int, domain_size: int, seed: int) -> int:
+    """Bijective cycle-walking Feistel permutation over [0, domain_size) in O(1) memory."""
+    if index < 0 or index >= domain_size:
+        raise ValueError("Permutation index out of range.")
+    if domain_size <= 1:
+        return 0
+    total_bits = max(2, (domain_size - 1).bit_length())
+    if total_bits % 2 == 1:
+        total_bits += 1
+    half_bits = total_bits // 2
+    mask = (1 << half_bits) - 1
+    value = index
+    while True:
+        left = (value >> half_bits) & mask
+        right = value & mask
+        for round_index in range(4):
+            f_val = _feistel_round(right, round_index, seed) & mask
+            left, right = right, left ^ f_val
+        value = (left << half_bits) | right
+        if value < domain_size:
+            return value
+
+
+def _decode_raw_index(lengths: tuple[int, ...], raw_index: int, alphabet: str) -> str:
+    base = len(alphabet)
+    offset = 0
+    for length in lengths:
+        size = base**length
+        if raw_index < offset + size:
+            value = raw_index - offset
+            chars = [alphabet[0]] * length
+            for position in range(length - 1, -1, -1):
+                value, digit = divmod(value, base)
+                chars[position] = alphabet[digit]
+            return "".join(chars)
+        offset += size
+    raise ValueError("Raw candidate index out of range.")
+
+
+def raw_domain_size(lengths: tuple[int, ...], preferences: CandidatePreferences | None = None) -> int:
+    validated = validate_lengths(lengths)
+    alphabet = resolve_alphabet(preferences)
+    base = len(alphabet)
+    return sum(base**length for length in validated)
+
+
+def _uses_default_exhaustive(preferences: CandidatePreferences | None) -> bool:
+    if preferences is None:
+        return True
+    return (
+        preferences.strategy in ("exhaustive", "generated")
+        and preferences.charset_mode == "all"
+        and preferences.pattern in ("", "any")
+        and not preferences.priority_names
+    )
