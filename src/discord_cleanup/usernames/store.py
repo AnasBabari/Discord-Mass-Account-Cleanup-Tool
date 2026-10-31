@@ -82,4 +82,64 @@ CREATE TABLE IF NOT EXISTS results (
     PRIMARY KEY (scan_id, username)
 );
 CREATE INDEX IF NOT EXISTS results_status ON results(scan_id, status, username);
+CREATE TABLE IF NOT EXISTS username_cooldowns (
+    route TEXT PRIMARY KEY,
+    retry_at REAL NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    bucket TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS observation_cache (
+    username TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    status TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    observed_epoch REAL NOT NULL,
+    expires_at TEXT NOT NULL,
+    expires_epoch REAL NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    provenance TEXT NOT NULL DEFAULT 'network',
+    PRIMARY KEY (username, provider, scope)
+);
+CREATE INDEX IF NOT EXISTS observation_cache_lookup
+    ON observation_cache(provider, scope, username, expires_epoch);
+CREATE TABLE IF NOT EXISTS provider_health (
+    provider TEXT PRIMARY KEY,
+    state TEXT NOT NULL DEFAULT 'ready',
+    reason TEXT NOT NULL DEFAULT '',
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    consecutive_rate_limits INTEGER NOT NULL DEFAULT 0,
+    retry_at REAL NOT NULL DEFAULT 0.0,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS request_diagnostics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    route TEXT NOT NULL,
+    username TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    http_status INTEGER NOT NULL DEFAULT 0,
+    latency_ms REAL NOT NULL DEFAULT 0.0,
+    classification TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    ratelimit_limit INTEGER,
+    ratelimit_remaining REAL,
+    ratelimit_reset_after REAL,
+    ratelimit_bucket TEXT NOT NULL DEFAULT '',
+    ratelimit_scope TEXT NOT NULL DEFAULT '',
+    ratelimit_global INTEGER NOT NULL DEFAULT 0,
+    retry_at REAL NOT NULL DEFAULT 0.0,
+    retry_reason TEXT NOT NULL DEFAULT '',
+    wait_seconds REAL NOT NULL DEFAULT 0.0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    consecutive_rate_limits INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS diagnostics_scope_idx ON request_diagnostics(scope, id DESC);
+CREATE TABLE IF NOT EXISTS diagnostics_counters (
+    scope TEXT PRIMARY KEY,
+    definitive_network_checks INTEGER NOT NULL DEFAULT 0,
+    cached_reused INTEGER NOT NULL DEFAULT 0,
 """
