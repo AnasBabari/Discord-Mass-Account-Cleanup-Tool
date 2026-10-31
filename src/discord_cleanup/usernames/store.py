@@ -1317,3 +1317,59 @@ class UsernameScanStore:
                     ),
                 )
         return self.get_scan(scan_id, account_id)
+
+    def _row_to_result(self, row: sqlite3.Row, now: float | None = None) -> UsernameCheckResult:
+        keys = row.keys()
+        origin = str(row["origin"]) if "origin" in keys and row["origin"] else ObservationOrigin.NETWORK.value
+        expires_at = str(row["expires_at"]) if "expires_at" in keys and row["expires_at"] else ""
+        bound_clock: Callable[[], float] = (lambda: float(now)) if now is not None else self.clock
+        return UsernameCheckResult(
+            username=row["username"],
+            status=UsernameStatus(row["status"]),
+            checked_at=row["checked_at"],
+            message=row["message"],
+            origin=origin,
+            provider=str(row["provider"]) if "provider" in keys else "",
+            expires_at=expires_at,
+            reused_at=str(row["reused_at"]) if "reused_at" in keys else "",
+            _clock=bound_clock,
+        )
+
+    def availability_counts_and_next_expiry(
+        self,
+        scan_id: str,
+        account_id: str,
+        *,
+        now: float | None = None,
+    ) -> tuple[int, int, float | None]:
+        """Return (total_available, fresh_available, next_expiry_epoch) for `scan_id`."""
+        self.get_scan(scan_id, account_id)
+        eval_now = float(self.clock()) if now is None else float(now)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM results WHERE scan_id=? AND status='available'",
+                (scan_id,),
+            ).fetchall()
+        total_avail = len(rows)
+        fresh_avail = 0
+        next_expiry: float | None = None
+        for row in rows:
+            res = self._row_to_result(row, now=eval_now)
+            if res.is_fresh(eval_now):
+                fresh_avail += 1
+                exp = res.effective_expires_epoch()
+                if exp is not None and exp > eval_now:
+                    if next_expiry is None or exp < next_expiry:
+                        next_expiry = exp
+        return total_avail, fresh_avail, next_expiry
+
+    def availability_counts(
+        self,
+        scan_id: str,
+        account_id: str,
+        *,
+        now: float | None = None,
+    ) -> tuple[int, int]:
+        """Return (total_available, fresh_available) for `scan_id` without mutating stored timestamps."""
+        total_avail, fresh_avail, _ = self.availability_counts_and_next_expiry(scan_id, account_id, now=now)
+        return total_avail, fresh_avail
