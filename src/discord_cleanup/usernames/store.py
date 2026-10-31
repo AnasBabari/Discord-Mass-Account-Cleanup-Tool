@@ -1373,3 +1373,59 @@ class UsernameScanStore:
         """Return (total_available, fresh_available) for `scan_id` without mutating stored timestamps."""
         total_avail, fresh_avail, _ = self.availability_counts_and_next_expiry(scan_id, account_id, now=now)
         return total_avail, fresh_avail
+
+    def results(
+        self,
+        scan_id: str,
+        account_id: str,
+        available_only: bool = True,
+        offset: int = 0,
+        limit: int = 100,
+        *,
+        now: float | None = None,
+        fresh_only: bool = False,
+    ) -> tuple[list[UsernameCheckResult], int]:
+        self.get_scan(scan_id, account_id)
+        eval_now = float(self.clock()) if now is None else float(now)
+        where = "scan_id=?" + (" AND status='available'" if available_only else "")
+        safe_limit = max(1, min(limit, 1000))
+        safe_offset = max(0, offset)
+        if not fresh_only:
+            with self._connect() as connection:
+                count = connection.execute(f"SELECT COUNT(*) FROM results WHERE {where}", (scan_id,)).fetchone()[0]
+                rows = connection.execute(
+                    f"SELECT * FROM results WHERE {where} ORDER BY username LIMIT ? OFFSET ?",
+                    (scan_id, safe_limit, safe_offset),
+                ).fetchall()
+            return [self._row_to_result(row, now=eval_now) for row in rows], count
+
+        with self._connect() as connection:
+            all_rows = connection.execute(
+                f"SELECT * FROM results WHERE {where} ORDER BY username",
+                (scan_id,),
+            ).fetchall()
+        fresh_results = [
+            res for row in all_rows if (res := self._row_to_result(row, now=eval_now)).is_fresh(eval_now)
+        ]
+        return fresh_results[safe_offset : safe_offset + safe_limit], len(fresh_results)
+
+    def iter_results(
+        self,
+        scan_id: str,
+        account_id: str,
+        available_only: bool = True,
+        *,
+        now: float | None = None,
+        fresh_only: bool = False,
+    ) -> Iterator[UsernameCheckResult]:
+        self.get_scan(scan_id, account_id)
+        eval_now = float(self.clock()) if now is None else float(now)
+        where = "scan_id=?" + (" AND status='available'" if available_only else "")
+        with self._connect() as connection:
+            cursor = connection.execute(f"SELECT * FROM results WHERE {where} ORDER BY username", (scan_id,))
+            while rows := cursor.fetchmany(1000):
+                for row in rows:
+                    res = self._row_to_result(row, now=eval_now)
+                    if fresh_only and not res.is_fresh(eval_now):
+                        continue
+                    yield res
