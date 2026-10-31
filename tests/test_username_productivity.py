@@ -115,3 +115,63 @@ def test_bucket_and_global_cooldowns_never_shorten_active_deadline(tmp_path):
         None,
         now=1005.0,
     )
+    deadline2 = store.save_rate_limit_deadlines(
+        PUBLIC_CHECK_URL,
+        scope=PUBLIC_USERNAME_SCOPE,
+        retry_at=1006.0,
+        reason="Request pacing",
+        metadata=meta_short,
+    )
+    assert deadline2 == pytest.approx(1120.25)
+    active_at, active_reason = store.cooldown(
+        PUBLIC_CHECK_URL, scope=PUBLIC_USERNAME_SCOPE, bucket="b1"
+    )
+    assert active_at == pytest.approx(1120.25)
+    assert active_reason == "Rate limited"
+
+
+def test_positive_only_jitter_never_shortens_wait(tmp_path):
+    clock = FakeClock(1000.0)
+    store = UsernameScanStore(tmp_path / "jitter.db")
+    transport = MagicMock()
+    transport.request.side_effect = [
+        MockResponse(status_code=429, json_data={"retry_after": 10.0}),
+        MockResponse(json_data={"taken": True}),
+    ]
+    client = PublicUsernameClient(
+        store,
+        transport=transport,
+        min_interval=1.0,
+        safety_margin=0.25,
+        jitter=0.5,
+        clock=clock,
+        wait=clock.wait,
+        rng=lambda: 0.8,  # deterministic positive jitter = 0.4s
+    )
+    res = client.check_username_availability("abc")
+    assert res.status == UsernameStatus.UNAVAILABLE
+    # Base wait = 10.0 + 0.25 safety_margin + 0.4 positive jitter = 10.65s
+    assert clock.now >= 1010.25
+    assert clock.now == pytest.approx(1010.65)
+
+
+@pytest.mark.parametrize(
+    "status_code,headers,url",
+    [
+        (302, {"Location": "https://discord.com/login"}, PUBLIC_CHECK_URL),
+        (307, {"Location": "https://example.com"}, PUBLIC_CHECK_URL),
+        (200, {"Location": "https://discord.com/channels/@me"}, PUBLIC_CHECK_URL),
+        (200, {}, "https://discord.com/login"),
+    ],
+)
+def test_redirect_responses_rejected_before_and_after_following(tmp_path, status_code, headers, url):
+    clock = FakeClock()
+    store = UsernameScanStore(tmp_path / "redir.db")
+    transport = MagicMock()
+    resp = MockResponse(status_code=status_code, json_data={"taken": False}, headers=headers)
+    resp.url = url
+    transport.request.return_value = resp
+    client = PublicUsernameClient(store, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    with pytest.raises(InvalidPayloadError, match="redirect"):
+        client.check_username_availability("abc")
+    assert store.get_cached_observation("abc", provider="public", scope=PUBLIC_USERNAME_SCOPE, now=clock.now) is None
