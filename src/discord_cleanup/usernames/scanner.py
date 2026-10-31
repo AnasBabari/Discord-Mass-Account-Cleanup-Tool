@@ -545,3 +545,61 @@ class UsernameScanner:
                 with _INFLIGHT_MUTEX:
                     _ACTIVE_SHARED_THREADS.add(worker_thread)
                 worker_thread.start()
+
+            try:
+                cancelled_while_waiting = False
+                while not entry.done.wait(timeout=0.01):
+                    if cancel_event.is_set():
+                        consumer_cancel.set()
+                        if entry.done.is_set() or entry.done.wait(timeout=0.01):
+                            break
+                        cancelled_while_waiting = True
+                        entry.remove_waiter(slot)
+                        if entry.shared_cancel.is_set() and entry.worker_thread is not None:
+                            entry.worker_thread.join(timeout=0.5)
+                        raise RequestCancelledError("Username check cancelled.")
+                    if self._is_deadline_expired(max_wait_deadline_mono):
+                        consumer_cancel.set()
+                        entry.remove_waiter(slot)
+                        if entry.shared_cancel.is_set() and entry.worker_thread is not None:
+                            entry.worker_thread.join(timeout=0.5)
+                        raise RequestCancelledError("Active duration budget reached.")
+
+                if entry.worker_thread is not None and entry.shared_cancel.is_set():
+                    entry.worker_thread.join(timeout=0.5)
+
+                this_slot_dispatched = (
+                    slot.attempts_committed > 0
+                    or (entry.total_attempts_committed == 0 and is_leader and not entry.cross_process_dedup)
+                )
+                if cancelled_while_waiting or (cancel_event.is_set() and not this_slot_dispatched):
+                    consumer_cancel.set()
+                    raise RequestCancelledError("Username check cancelled.")
+                if self._is_deadline_expired(max_wait_deadline_mono) and slot.attempts_committed == 0:
+                    consumer_cancel.set()
+                    raise RequestCancelledError("Active duration budget reached.")
+                if entry.error is not None:
+                    if (
+                        isinstance(entry.error, RequestCancelledError)
+                        and self._is_deadline_expired(max_wait_deadline_mono)
+                        and not cancel_event.is_set()
+                    ):
+                        raise RequestCancelledError("Active duration budget reached.") from entry.error
+                    raise entry.error
+                assert entry.result is not None
+                res = entry.result
+            finally:
+                consumer_cancel.set()
+                entry.remove_waiter(slot)
+
+            if force_recheck:
+                obs_epoch = res.effective_observed_epoch()
+                if obs_epoch is None or obs_epoch < request_started_epoch:
+                    # Joined an in-flight entry whose observation predated our recheck request; run a fresh check.
+                    if not can_dispatch_network():
+                        if cancel_event.is_set():
+                            raise RequestCancelledError("Username check cancelled.")
+                        if self._is_deadline_expired(max_wait_deadline_mono):
+                            raise RequestCancelledError("Active duration budget reached.")
+                        raise RequestCancelledError("Network request budget reached before dispatch.")
+                    continue
