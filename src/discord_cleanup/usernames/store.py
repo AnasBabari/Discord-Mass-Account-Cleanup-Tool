@@ -221,3 +221,63 @@ class UsernameScanStore:
 
         # Version 1 or 2 (or interrupted v3 backfill): run bounded-batch backfill once
         self._run_bounded_backfill()
+
+    @staticmethod
+    def _ensure_columns(connection: sqlite3.Connection) -> None:
+        scan_cols = {row[1] for row in connection.execute("PRAGMA table_info(scans)").fetchall()}
+        for col_name, col_def in (
+            ("strategy", "TEXT NOT NULL DEFAULT 'exhaustive'"),
+            ("network_checked", "INTEGER NOT NULL DEFAULT 0"),
+            ("cache_hits", "INTEGER NOT NULL DEFAULT 0"),
+            ("dedup_hits", "INTEGER NOT NULL DEFAULT 0"),
+            ("pause_reason", "TEXT NOT NULL DEFAULT ''"),
+            ("config_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ):
+            if col_name not in scan_cols:
+                connection.execute(f"ALTER TABLE scans ADD COLUMN {col_name} {col_def}")
+
+        result_cols = {row[1] for row in connection.execute("PRAGMA table_info(results)").fetchall()}
+        for col_name, col_def in (
+            ("origin", "TEXT NOT NULL DEFAULT 'network'"),
+            ("provider", "TEXT NOT NULL DEFAULT ''"),
+            ("expires_at", "TEXT NOT NULL DEFAULT ''"),
+            ("reused_at", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if col_name not in result_cols:
+                connection.execute(f"ALTER TABLE results ADD COLUMN {col_name} {col_def}")
+
+        cooldown_cols = {row[1] for row in connection.execute("PRAGMA table_info(username_cooldowns)").fetchall()}
+        if "bucket" not in cooldown_cols:
+            connection.execute("ALTER TABLE username_cooldowns ADD COLUMN bucket TEXT NOT NULL DEFAULT ''")
+
+        counter_cols = {row[1] for row in connection.execute("PRAGMA table_info(diagnostics_counters)").fetchall()}
+        for col_name, col_def in (
+            ("last_interval_start", "REAL NOT NULL DEFAULT 0.0"),
+            ("last_interval_end", "REAL NOT NULL DEFAULT 0.0"),
+        ):
+            if col_name not in counter_cols:
+                connection.execute(f"ALTER TABLE diagnostics_counters ADD COLUMN {col_name} {col_def}")
+
+    def _run_bounded_backfill(self) -> None:
+        policy = CacheFreshnessPolicy()
+        while True:
+            with self._connect() as connection:
+                meta_row = connection.execute(
+                    "SELECT value FROM schema_meta WHERE key='backfill_v3_last_rowid'"
+                ).fetchone()
+                last_rowid = int(meta_row[0]) if meta_row is not None and str(meta_row[0]).isdigit() else 0
+
+                rows = connection.execute(
+                    "SELECT r.rowid AS r_rowid, r.scan_id, r.username, r.status, r.checked_at, "
+                    "r.message, r.origin, r.provider, r.expires_at, s.account_id "
+                    "FROM results r JOIN scans s ON r.scan_id = s.id "
+                    "WHERE r.rowid > ? AND r.status IN ('available', 'unavailable') "
+                    "AND COALESCE(NULLIF(r.origin, ''), 'network') = 'network' "
+                    "ORDER BY r.rowid ASC LIMIT ?",
+                    (last_rowid, MIGRATION_BATCH_SIZE),
+                ).fetchall()
+
+                if not rows:
+                    connection.execute(
+                        "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('migration_v3_complete', '1')"
+                    )
