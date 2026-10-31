@@ -55,3 +55,62 @@ def validate_username(username: str) -> str:
     if ".." in username:
         return "Consecutive periods are not allowed."
     return ""
+
+
+def parse_custom_names(text: str) -> list[str]:
+    names: dict[str, None] = {}
+    for value in re.split(r"[\s,]+", text.strip()):
+        if value:
+            # Redact accidental credential pastes before they can reach saved scan data.
+            name = sanitize_token(value).lower().removeprefix("@")
+            names.setdefault(name, None)
+    return list(names)
+
+
+def validate_lengths(lengths: tuple[int, ...]) -> tuple[int, ...]:
+    if not lengths or any(length not in (3, 4) for length in lengths):
+        raise ValueError("Choose three-character names, four-character names, or both.")
+    return tuple(sorted(set(lengths)))
+
+
+def resolve_alphabet(preferences: CandidatePreferences | None = None) -> str:
+    if preferences is None or preferences.charset_mode == "all":
+        return ALPHABET
+    mode = preferences.charset_mode
+    if mode in ("letters_only", "letters"):
+        chars = "".join(c for c in ALPHABET if "a" <= c <= "z")
+    elif mode in ("alphanumeric", "no_punctuation"):
+        chars = "".join(c for c in ALPHABET if ("a" <= c <= "z") or ("0" <= c <= "9"))
+    elif mode in ("no_periods", "letters_digits_underscore"):
+        chars = "".join(c for c in ALPHABET if c != ".")
+    elif mode == "custom":
+        seen: dict[str, None] = {}
+        for c in preferences.allowed_chars.lower():
+            if c in ALPHABET:
+                seen.setdefault(c, None)
+        chars = "".join(seen)
+    else:
+        raise ValueError(f"Unknown character-set preference: {mode}")
+    if not chars:
+        raise ValueError("Selected character preference leaves no valid characters.")
+    return chars
+
+
+def _is_pronounceable(name: str) -> bool:
+    if not all("a" <= c <= "z" for c in name):
+        return False
+    shape = "".join("V" if c in VOWELS else "C" for c in name)
+    if len(name) == 3:
+        return shape in ("CVC", "VCV")
+    return shape in ("CVCV", "VCVC", "CVCC", "CCVC")
+
+
+def _matches_template(name: str, template: str) -> bool:
+    if len(name) != len(template):
+        return False
+    for char, spec in zip(name, template, strict=True):
+        if spec in ("?", "*"):
+            continue
+        elif spec == "L":
+            if not ("a" <= char <= "z"):
+                return False
