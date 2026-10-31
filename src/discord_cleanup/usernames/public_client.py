@@ -543,5 +543,64 @@ class PublicUsernameClient:
                             consecutive_rate_limits=self._consecutive_rate_limits,
                             retry_at=active_deadline,
                         )
+                        self.store.record_diagnostic(
+                            provider="public",
+                            scope=self.scope,
+                            route=PUBLIC_USERNAME_ENDPOINT,
+                            username=username,
+                            classification="uninterpretable",
+                            origin="network",
+                            scan_id=scan_id,
+                            started_at=req_start_iso,
+                            completed_at=req_end_iso,
+                            http_status=response.status_code,
+                            latency_ms=latency_ms,
+                            retry_at=active_deadline,
+                            retry_reason="Redirected response",
+                            wait_seconds=waited_s,
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                        )
+                        raise InvalidPayloadError("Discord redirected the public check. Availability is unverified.")
+
+                    resp_text_lower = getattr(response, "text", "").lower()
+                    if "<html" in resp_text_lower or response.status_code in (401, 403):
+                        self._consecutive_failures += 1
+                        self.store.save_provider_health(
+                            self.scope,
+                            ProviderHealthState.BLOCKED_CHALLENGE,
+                            "Discord blocked the public check. Availability is unverified.",
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                            retry_at=active_deadline,
+                        )
+                        self.store.record_diagnostic(
+                            provider="public",
+                            scope=self.scope,
+                            route=PUBLIC_USERNAME_ENDPOINT,
+                            username=username,
+                            classification="blocked_challenge",
+                            origin="network",
+                            scan_id=scan_id,
+                            started_at=req_start_iso,
+                            completed_at=req_end_iso,
+                            http_status=response.status_code,
+                            latency_ms=latency_ms,
+                            ratelimit_limit=rl_meta.limit,
+                            ratelimit_remaining=rl_meta.remaining,
+                            ratelimit_reset_after=rl_meta.reset_after,
+                            ratelimit_bucket=rl_meta.bucket,
+                            ratelimit_scope=rl_meta.scope,
+                            ratelimit_global=rl_meta.is_global,
+                            retry_at=active_deadline,
+                            retry_reason=active_reason or "Blocked",
+                            wait_seconds=waited_s,
+                            consecutive_failures=self._consecutive_failures,
+                            consecutive_rate_limits=self._consecutive_rate_limits,
+                        )
+                        raise UpstreamBlockedError("Discord blocked the public check. Availability is unverified.")
+
+                    if isinstance(payload, dict) and any(key.startswith("captcha_") for key in payload):
+                        self._consecutive_failures += 1
             except Timeout:
                 pass
