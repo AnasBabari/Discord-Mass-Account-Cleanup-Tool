@@ -405,6 +405,66 @@ def run_username_checker(
                     if charset not in ("all", "letters", "alphanumeric", "no_punctuation"):
                         print("Choose all, letters, alphanumeric, or no_punctuation.")
                         continue
+                    pattern = (
+                        input(
+                            "Pattern [any / pronounceable / starts_with_letter / no_edge_punctuation / palindrome / template e.g. CVC (default any)]: "
+                        ).strip()
+                        or "any"
+                    )
+                    seed_raw = input("Seed [default 42]: ").strip()
+                    seed = int(seed_raw) if seed_raw.isdigit() else 42
+                    max_net_raw = input("Max network requests budget [blank for unlimited]: ").strip()
+                    max_net = int(max_net_raw) if max_net_raw.isdigit() and int(max_net_raw) > 0 else None
+                    prefs = CandidatePreferences(
+                        strategy=strategy, charset_mode=charset, pattern=pattern, seed=seed
+                    )
+                    prev = preview_candidates("generated", lengths, [], prefs, sample_size=8)
+                    if prev.total_candidates == 0:
+                        print("No candidates match the selected filter.")
+                        continue
+                    print(
+                        f"Preview ({prev.strategy_summary}): {prev.total_candidates:,} candidates · Sample: {', '.join(prev.sample_candidates)}"
+                    )
+                    scan = store.create_scan(account_id, lengths=lengths, preferences=prefs)
+                    if max_net is not None:
+                        budget = RequestBudget(max_network_requests=max_net)
+                elif choice == "7":
+                    wl_entries = store.list_watchlist(account_id)
+                    wl = [str(item["username"]) for item in wl_entries]
+                    print(f"Current watchlist ({len(wl)}): {', '.join(wl[:20]) if wl else 'empty'}")
+                    sub = input("Watchlist action [a=add / r=run stale checks / c=clear / q=back]: ").strip().lower()
+                    if sub == "a":
+                        raw = input("Names to add: ").strip()
+                        added = store.add_watchlist(account_id, parse_custom_names(raw))
+                        print(f"Added {len(added)} valid username(s) to watchlist.")
+                        continue
+                    if sub == "c":
+                        for item in wl:
+                            store.remove_watchlist(account_id, item)
+                        print("Watchlist cleared.")
+                        continue
+                    if sub == "r":
+                        cands = store.watchlist_candidates(
+                            account_id,
+                            provider="public" if (public or client is None) else "account",
+                            stale_only=True,
+                        ) or wl
+                        if not cands:
+                            print("Watchlist is empty.")
+                            continue
+                        scan = store.create_scan(account_id, mode="custom", names=cands)
+                    else:
+                        continue
+                elif choice == "8":
+                    raw = input("Usernames to force-recheck live over the network: ").strip()
+                    names = parse_custom_names(raw)
+                    if not names:
+                        print("No usernames entered.")
+                        continue
+                    scan = store.create_scan(account_id, mode="custom", names=names)
+                    force_recheck = True
+                elif choice == "9":
+                    _print_diagnostics(store, account_id, route)
             except (KeyboardInterrupt, EOFError):
                 pass
             except Exception as exc:
