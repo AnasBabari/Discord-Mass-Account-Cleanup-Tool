@@ -658,3 +658,61 @@ class UsernameScanner:
             raise ValueError("The check limit must be positive.")
         if budget is not None:
             budget.validate()
+        try:
+            with self.store.lock(scan_id):
+                return self._run_locked(
+                    scan_id,
+                    account_id,
+                    cancel_event or threading.Event(),
+                    on_progress,
+                    max_checks,
+                    budget=budget,
+                    use_cache=use_cache,
+                    force_recheck=force_recheck,
+                    before_commit_hook=before_commit_hook or self.before_commit_hook,
+                )
+        except Timeout as exc:
+            raise ScanBusyError("This saved scan is already running in another window or process.") from exc
+
+    def _run_locked(
+        self,
+        scan_id: str,
+        account_id: str,
+        cancel_event: threading.Event,
+        on_progress: Callable[[UsernameProgress], None] | None,
+        max_checks: int | None,
+        *,
+        budget: RequestBudget | None = None,
+        use_cache: bool | None = None,
+        force_recheck: bool = False,
+        before_commit_hook: Callable[[], None] | None = None,
+    ) -> UsernameScan:
+        scan = self.store.get_scan(scan_id, account_id)
+        if scan.generator_version not in SUPPORTED_GENERATOR_VERSIONS:
+            raise ValueError("This scan uses a different generator version. Start a new scan.")
+        if scan.status == "completed" and not force_recheck:
+            return scan
+
+        provider = self._provider_name(account_id)
+        route_url = self._route_url(account_id)
+        effective_use_cache = (
+            self.freshness_policy.use_cache if use_cache is None else bool(use_cache)
+        ) and not force_recheck
+        preferences = self.store.scan_preferences(scan_id, account_id) if scan.generator_version >= 2 else None
+        names = self.store.custom_names(scan_id, account_id) if scan.mode == "custom" else []
+        scan = self.store.set_status(scan_id, account_id, "running", pause_reason="")
+
+        processed = 0
+        definitive_this_run = 0
+        network_requests_this_run = 0
+        reserved_network_requests = 0
+        run_active = True
+        candidate = ""
+        pause_reason = "Paused by user"
+
+        start_mono = self.clock() if self._uses_custom_clock else self.monotonic()
+        max_wait_deadline_mono = (
+            (start_mono + budget.max_duration_seconds)
+            if (budget is not None and budget.max_duration_seconds is not None)
+            else None
+        )
