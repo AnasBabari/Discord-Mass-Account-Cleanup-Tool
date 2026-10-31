@@ -898,6 +898,63 @@ class UsernameScanner:
         except (RequestCancelledError, KeyboardInterrupt):
             return self.store.set_status(scan_id, account_id, "paused", pause_reason=pause_reason)
         except Exception as exc:
-            pass
+            message = sanitize_token(str(exc))
+            if self.client.token:
+                message = message.replace(self.client.token, "[REDACTED_TOKEN]")
+            existing_health = self.store.get_provider_health(account_id, route=route_url, now=self.clock())
+            if isinstance(self.client, PublicUsernameClient) or existing_health.is_circuit_open:
+                consec_fail = max(1, existing_health.consecutive_failures)
+                consec_rl = existing_health.consecutive_rate_limits
+            else:
+                consec_fail = existing_health.consecutive_failures + 1
+                consec_rl = existing_health.consecutive_rate_limits
+
+            if isinstance(exc, UpstreamBlockedError):
+                health_state = ProviderHealthState.BLOCKED_CHALLENGE
+            elif isinstance(exc, InvalidPayloadError):
+                health_state = (
+                    ProviderHealthState.PAUSED_FAILURES
+                    if consec_fail >= max_consec_fail
+                    else ProviderHealthState.UNINTERPRETABLE_RESPONSE
+                )
+            elif isinstance(exc, (NetworkError, RequestTimeoutError)):
+                if isinstance(self.client, PublicUsernameClient) or consec_fail >= max_consec_fail:
+                    health_state = ProviderHealthState.PAUSED_FAILURES
+                else:
+                    health_state = ProviderHealthState.BACKING_OFF
+            else:
+                health_state = ProviderHealthState.PAUSED_FAILURES
+            self.store.save_provider_health(
+                account_id,
+                health_state,
+                message,
+                consecutive_failures=consec_fail,
+                consecutive_rate_limits=consec_rl,
+                retry_at=existing_health.retry_at,
+                now=self.clock(),
+            )
+            if candidate:
+                self.store.save_result(
+                    scan_id,
+                    account_id,
+                    UsernameCheckResult(
+                        candidate,
+                        UsernameStatus.ERROR,
+                        self._now_iso(),
+                        message,
+                        origin=ObservationOrigin.NETWORK.value,
+                        provider=provider,
+                        _clock=self.clock,
+                    ),
+                    None,
+                    network_attempts_already_recorded=True,
+                )
+            return self.store.set_status(
+                scan_id,
+                account_id,
+                "failed",
+                message,
+                pause_reason=f"Circuit breaker ({health_state.label}): {message}",
+            )
         finally:
             pass
