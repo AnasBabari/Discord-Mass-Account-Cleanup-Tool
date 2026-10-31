@@ -451,3 +451,58 @@ class UsernameScanStore:
                 self._upsert_cooldown_row(
                     connection, f"global:{effective_scope}", retry_at, f"Global rate limit ({clean_reason})", ""
                 )
+
+    @staticmethod
+    def _upsert_cooldown_row(
+        connection: sqlite3.Connection, route: str, retry_at: float, reason: str, bucket: str = ""
+    ) -> None:
+        connection.execute(
+            "INSERT INTO username_cooldowns (route, retry_at, reason, bucket) VALUES (?,?,?,?) "
+            "ON CONFLICT(route) DO UPDATE SET "
+            "reason=CASE WHEN excluded.retry_at>retry_at THEN excluded.reason ELSE reason END, "
+            "retry_at=MAX(retry_at,excluded.retry_at), "
+            "bucket=CASE WHEN excluded.bucket!='' THEN excluded.bucket ELSE username_cooldowns.bucket END",
+            (route, retry_at, reason, bucket),
+        )
+
+    def get_provider_health(
+        self, provider: str = PUBLIC_USERNAME_SCOPE, route: str = "", now: float | None = None
+    ) -> ProviderHealth:
+        current_now = float(self.clock()) if now is None else float(now)
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT provider, state, reason, consecutive_failures, consecutive_rate_limits, retry_at, updated_at "
+                "FROM provider_health WHERE provider=?",
+                (provider,),
+            ).fetchone()
+        cooldown_at, cooldown_reason = self.cooldown(route, scope=provider) if route else (0.0, "")
+        if row is None:
+            if cooldown_at > current_now and cooldown_reason == "Rate limited":
+                return ProviderHealth(
+                    provider=provider,
+                    state=ProviderHealthState.WAITING_COOLDOWN,
+                    reason=cooldown_reason,
+                    retry_at=cooldown_at,
+                )
+            return ProviderHealth(provider=provider, state=ProviderHealthState.READY)
+
+        state = ProviderHealthState(row["state"])
+        retry_at = max(float(row["retry_at"]), cooldown_at)
+        reason = str(row["reason"])
+        # WAITING_COOLDOWN and BACKING_OFF recover automatically once retry_at expires;
+        # PAUSED_FAILURES, BLOCKED_CHALLENGE, and UNINTERPRETABLE_RESPONSE require explicit reset.
+        if state in (ProviderHealthState.WAITING_COOLDOWN, ProviderHealthState.BACKING_OFF) and retry_at <= current_now:
+            state = ProviderHealthState.READY
+            reason = ""
+        elif state == ProviderHealthState.READY and cooldown_at > current_now and cooldown_reason == "Rate limited":
+            state = ProviderHealthState.WAITING_COOLDOWN
+            reason = cooldown_reason
+        return ProviderHealth(
+            provider=str(row["provider"]),
+            state=state,
+            reason=reason,
+            consecutive_failures=int(row["consecutive_failures"]),
+            consecutive_rate_limits=int(row["consecutive_rate_limits"]),
+            retry_at=retry_at,
+            updated_at=str(row["updated_at"]),
+        )
