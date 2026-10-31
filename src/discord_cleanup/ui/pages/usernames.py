@@ -583,3 +583,63 @@ class UsernamesPage(QWidget):
             worker_kwargs["force_recheck"] = True
         if recheck_names is not None:
             worker_kwargs["recheck_names"] = recheck_names
+        if self.clock is not time.time:
+            worker_kwargs["clock"] = self.clock
+
+        worker = UsernameScanWorker(
+            "" if public else self.token,
+            mode,
+            tuple(self.length_input.currentData()),
+            self.custom_input.toPlainText(),
+            scan_id,
+            self.store_path,
+            access="public" if public else "account",
+            **worker_kwargs,
+        )
+        self.worker = self.worker_tracker(worker)
+
+        def current() -> bool:
+            return session == self._session and self.worker is worker
+
+        worker.account_ready.connect(lambda account, scans: self.on_account(account, scans) if current() else None)
+        worker.progress_signal.connect(lambda progress: self.on_progress(progress) if current() else None)
+        worker.completed_signal.connect(lambda scan: self.on_completed(scan) if current() else None)
+        worker.error_signal.connect(lambda message: self.on_error(message) if current() else None)
+        worker.finished.connect(lambda: self.set_busy(False) if current() else None)
+        self.set_busy(True)
+        self.status_label.setText(
+            "Loading public scans..." if public else "Verifying account and loading saved progress..."
+        )
+        worker.start()
+
+    def load_scans(self) -> None:
+        self._launch("list")
+
+    def start_scan(self) -> None:
+        mode = str(self.mode_input.currentData())
+        if mode == "custom" and not parse_custom_names(self.custom_input.toPlainText()):
+            self.status_label.setText("Enter at least one username to check.")
+            return
+        if mode == "watchlist":
+            scope = self._active_scope() or PUBLIC_USERNAME_SCOPE
+            if not self.store().list_watchlist(scope):
+                self.status_label.setText("Watchlist is empty. Add usernames to the watchlist first.")
+                return
+        if mode == "generated":
+            prefs = self.current_preferences()
+            if not prefs.is_default_exhaustive():
+                preview = preview_candidates("generated", tuple(self.length_input.currentData()), [], prefs, sample_size=1)
+                if preview.total_candidates == 0:
+                    self.status_label.setText("No candidates match the selected character set and pattern.")
+                    return
+        self._launch(mode)
+
+    def resume_scan(self) -> None:
+        if self.scan is not None:
+            self._launch("resume", self.scan.id)
+
+    def _selected_table_usernames(self) -> list[str]:
+        selected: list[str] = []
+        sel_model = self.table.selectionModel()
+        for idx in sel_model.selectedRows() if sel_model is not None else []:
+            item = self.table.item(idx.row(), 0)
