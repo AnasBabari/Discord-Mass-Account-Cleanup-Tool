@@ -7,6 +7,7 @@ from typing import Any
 
 from discord_cleanup.api.client import DEFAULT_API_CLIENT, DiscordApiClient
 from discord_cleanup.api.exceptions import AuthenticationError, DiscordCleanupError
+from discord_cleanup.cli.usernames import run_username_checker, run_username_cli_args
 from discord_cleanup.gateway.notifications import DEFAULT_GATEWAY_READER, GatewayNotificationsReader
 from discord_cleanup.models.domain import OperationPreview, OperationResult
 from discord_cleanup.security.credentials import DEFAULT_CREDENTIAL_STORE
@@ -353,6 +354,13 @@ def run_notifications_cleanup(client: DiscordApiClient, gateway: GatewayNotifica
 
 
 def main() -> None:
+    if "--usernames" in sys.argv:
+        extra = [arg for arg in sys.argv[1:] if arg != "--usernames"]
+        if extra:
+            run_username_cli_args(sys.argv[1:])
+        else:
+            run_username_checker()
+        return
     print("\n========================================================")
     print("        Discord Mass Account Cleanup Tool (CLI)         ")
     print("========================================================")
@@ -378,7 +386,7 @@ def main() -> None:
 
     while not token:
         try:
-            entered_token = get_masked_input("Enter Discord user token: ")
+            entered_token = get_masked_input("Enter Discord user token (or 'u' for the public username checker): ")
         except (KeyboardInterrupt, EOFError):
             print("\nExiting.")
             return
@@ -386,6 +394,10 @@ def main() -> None:
         if not entered_token.strip():
             print("No token entered. Exiting.")
             return
+
+        if entered_token.strip().lower() == "u":
+            run_username_checker()
+            continue
 
         entered_token = entered_token.strip()
         try:
@@ -407,6 +419,8 @@ def main() -> None:
         print("  [2] Remove Friends")
         print("  [3] Unblock Users")
         print("  [4] Mark Notifications Read")
+        print("  [5] Check Usernames (Public)")
+        print("  [6] Check Usernames (Signed-in Account)")
         print("  [T] Switch Account / Logout")
         print("  [Q] Exit")
 
@@ -424,6 +438,10 @@ def main() -> None:
             run_blocked_cleanup(client)
         elif choice == "4":
             run_notifications_cleanup(client, gateway)
+        elif choice == "5":
+            run_username_checker(public=True)
+        elif choice == "6":
+            run_username_checker(client)
         elif choice == "t":
             credentials.delete_token()
             client.clear_token()
