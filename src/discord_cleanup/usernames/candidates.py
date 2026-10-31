@@ -232,3 +232,62 @@ def _uses_default_exhaustive(preferences: CandidatePreferences | None) -> bool:
         and preferences.pattern in ("", "any")
         and not preferences.priority_names
     )
+
+
+def generator_version_for_preferences(preferences: CandidatePreferences | None = None) -> int:
+    return GENERATOR_VERSION if _uses_default_exhaustive(preferences) else GENERATOR_VERSION_V2
+
+
+_CANDIDATE_COUNT_CACHE: dict[tuple[tuple[int, ...], str, str, tuple[str, ...]], int] = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def _normalize_priority_entries(
+    lengths: tuple[int, ...],
+    preferences: CandidatePreferences | None,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Return (valid_unique_priority_names, invalid_priority_entries_with_reasons)."""
+    if preferences is None or not preferences.priority_names:
+        return [], []
+    valid_seen: dict[str, None] = {}
+    invalid_entries: list[tuple[str, str]] = []
+    for raw in preferences.priority_names:
+        if not raw:
+            continue
+        cleaned = sanitize_token(str(raw)).strip().lower().removeprefix("@")
+        if not cleaned or cleaned in valid_seen:
+            continue
+        err = validate_username(cleaned)
+        if err:
+            invalid_entries.append((cleaned, err))
+            continue
+        if len(cleaned) not in lengths:
+            invalid_entries.append((cleaned, f"Length {len(cleaned)} is not in selected lengths {lengths}."))
+            continue
+        valid_seen[cleaned] = None
+    return list(valid_seen), invalid_entries
+
+
+def _count_position_constrained(
+    allowed_per_pos: list[set[str]],
+) -> int:
+    """Count strings in the Cartesian product of allowed_per_pos that contain no '..'."""
+    other, period = 1, 0
+    for allowed in allowed_per_pos:
+        if not allowed:
+            return 0
+        has_dot = 1 if "." in allowed else 0
+        non_dot = len(allowed) - has_dot
+        other, period = (other + period) * non_dot, other * has_dot
+    return other + period
+
+
+def _template_char_matches(char: str, spec: str) -> bool:
+    if spec in ("?", "*"):
+        return True
+    if spec == "L":
+        return "a" <= char <= "z"
+    if spec in ("D", "#"):
+        return "0" <= char <= "9"
+    if spec == "V":
+        return char in VOWELS
