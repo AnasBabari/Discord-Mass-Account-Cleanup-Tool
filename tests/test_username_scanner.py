@@ -178,3 +178,60 @@ def test_lock_released_after_process_exit(scanner, scan_store):
         stderr=subprocess.PIPE,
         text=True,
     )
+    try:
+        assert helper.stdout.readline().strip() == "locked"
+        with pytest.raises(ScanBusyError):
+            scanner.run(scan.id, "account-one", max_checks=1)
+    finally:
+        helper.terminate()
+        helper.communicate(timeout=5)
+    assert scanner.run(scan.id, "account-one", max_checks=1).checked == 1
+
+
+def test_accounts_versions_and_export(scanner, scan_store, tmp_path):
+    scan = scan_store.create_scan("account-one", mode="custom", names=["abc", "=x", "xyz"])
+    scanner.run(scan.id, "account-one")
+    assert scan_store.list_scans("account-two") == []
+    with pytest.raises(ValueError, match="this account"):
+        scanner.run(scan.id, "account-two")
+    with pytest.raises(ValueError):
+        scan_store.export_csv(scan.id, "account-two", tmp_path / "other.csv")
+    output = tmp_path / "names.csv"
+    scan_store.export_csv(scan.id, "account-one", output)
+    with output.open(newline="", encoding="utf-8") as source:
+        rows = list(csv.DictReader(source))
+    assert len(rows) == 3
+    assert rows[0]["username"] == "'=x"
+    assert all(row["checked_at_utc"] for row in rows)
+    assert "secret-token" not in output.read_text()
+    with pytest.raises(ValueError, match="different"):
+        scan_store.export_csv(scan.id, "account-one", scan_store.path)
+    with sqlite3.connect(scan_store.path) as connection:
+        connection.execute("UPDATE scans SET generator_version=999 WHERE id=?", (scan.id,))
+    with pytest.raises(ValueError, match="generator version"):
+        scanner.run(scan.id, "account-one")
+
+
+def test_completed_scan_not_checked_again(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", mode="custom", names=["abc"])
+    assert scanner.run(scan.id, "account-one").status == "completed"
+    assert scanner.run(scan.id, "account-one").checked == 1
+    assert scanner.client.check_username_availability.call_count == 1
+
+
+def test_identify_requires_real_account_id(scanner):
+    assert scanner.identify() == "account-one"
+    scanner.client.verify_token.return_value = User("", "tester")
+    with pytest.raises(ValueError, match="account ID"):
+        scanner.identify()
+
+
+def test_progress_failure_does_not_corrupt_results(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", mode="custom", names=["abc"])
+
+    def broken_ui(progress):
+        raise RuntimeError("The consumer failed")
+
+    result = scanner.run(scan.id, "account-one", on_progress=broken_ui)
+    assert (result.status, result.checked, result.available) == ("completed", 1, 1)
+    assert scan_store.results(scan.id, "account-one")[0][0].status == UsernameStatus.AVAILABLE
