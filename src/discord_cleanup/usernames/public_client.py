@@ -857,4 +857,10 @@ class PublicUsernameClient:
                         f"Public check returned no definitive result (HTTP {response.status_code}). Availability is unverified."
                     )
             except Timeout:
-                pass
+                resolved_deadline = self._resolve_deadline(max_wait_deadline_mono)
+                if resolved_deadline is not None:
+                    current_clock = self.clock() if self._uses_custom_clock else self.monotonic()
+                    if current_clock >= resolved_deadline:
+                        raise RequestCancelledError("Active duration budget reached while waiting for request slot.") from None
+                if self.wait(event, 0.1):
+                    self._cancel_if_needed(event)
