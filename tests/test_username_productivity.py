@@ -857,4 +857,35 @@ def test_sqlite_migration_on_copy_of_legacy_schema(tmp_path):
 def test_migration_runs_once_preserves_expires_at_and_handles_malformed_timestamps(tmp_path):
     db_file = tmp_path / "migration_edge.sqlite3"
     with sqlite3.connect(db_file) as conn:
-        pass
+        conn.executescript(
+            """
+            PRAGMA user_version = 2;
+            CREATE TABLE scans (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                lengths TEXT NOT NULL,
+                names TEXT NOT NULL,
+                cursor INTEGER NOT NULL DEFAULT 0,
+                total INTEGER NOT NULL,
+                checked INTEGER NOT NULL DEFAULT 0,
+                available INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'paused',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                generator_version INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE results (
+                scan_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                status TEXT NOT NULL,
+                checked_at TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                origin TEXT NOT NULL DEFAULT 'network',
+                expires_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (scan_id, username)
+            );
+            INSERT INTO scans VALUES (
+            """
+        )
