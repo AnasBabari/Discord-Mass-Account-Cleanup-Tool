@@ -983,3 +983,62 @@ class UsernameScanStore:
 
         if rate_per_min is not None and rate_per_min > 0 and remaining_candidates > 0:
             eta_seconds = pending_cooldown + (remaining_candidates / (rate_per_min / 60.0))
+
+        return DiagnosticsSummary(
+            definitive_network_checks=definitive_net,
+            cached_observations_reused=cached_reused,
+            requests_avoided_deduplication=dedup_avoided,
+            requests_avoided_local_validation=local_invalid,
+            total_wait_seconds=wait_total,
+            network_requests_total=net_total,
+            recent_success_count=recent_success,
+            recent_rate_limit_count=recent_rl,
+            recent_failure_count=recent_fail,
+            consecutive_failures=consec_fail,
+            consecutive_rate_limits=consec_rl,
+            effective_definitive_checks_per_minute=rate_per_min,
+            estimated_remaining_seconds=eta_seconds,
+            provider_health=health,
+        )
+
+    @staticmethod
+    def _scan(row: sqlite3.Row) -> UsernameScan:
+        keys = row.keys()
+        return UsernameScan(
+            id=row["id"],
+            account_id=row["account_id"],
+            mode=row["mode"],
+            lengths=tuple(json.loads(row["lengths"])),
+            cursor=row["cursor"],
+            total=row["total"],
+            checked=row["checked"],
+            available=row["available"],
+            status=row["status"],
+            error=row["error"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            generator_version=row["generator_version"],
+            strategy=str(row["strategy"]) if "strategy" in keys else "exhaustive",
+            network_checked=int(row["network_checked"]) if "network_checked" in keys else 0,
+            cache_hits=int(row["cache_hits"]) if "cache_hits" in keys else 0,
+            dedup_hits=int(row["dedup_hits"]) if "dedup_hits" in keys else 0,
+            pause_reason=str(row["pause_reason"]) if "pause_reason" in keys else "",
+            config_json=str(row["config_json"]) if "config_json" in keys else "{}",
+        )
+
+    def create_scan(
+        self,
+        account_id: str,
+        mode: str = "generated",
+        lengths: tuple[int, ...] = (3, 4),
+        names: list[str] | None = None,
+        *,
+        preferences: CandidatePreferences | None = None,
+    ) -> UsernameScan:
+        if not account_id:
+            raise ValueError("A verified account is required.")
+        if mode not in ("generated", "custom", "priority", "watchlist"):
+            raise ValueError("Unknown search mode.")
+        lengths = validate_lengths(lengths)
+        prefs = preferences or CandidatePreferences()
+        raw_names = list(dict.fromkeys(sanitize_token(name).lower().removeprefix("@") for name in (names or [])))
