@@ -1093,3 +1093,59 @@ def test_force_recheck_does_not_reuse_pre_existing_cache(tmp_path):
     assert res.network_checks == 1
     assert res.cache_hits == 0
     assert transport.request.call_count == 1
+
+
+def test_candidate_count_fast_combinatorial_matches_enumeration_and_caches_across_seeds():
+    for lengths in ((3,), (4,), (3, 4)):
+        for charset in ("all", "letters", "alphanumeric", "no_punctuation"):
+            for pattern in (
+                "any",
+                "pronounceable",
+                "starts_with_letter",
+                "no_edge_punctuation",
+                "palindrome",
+                "CVC",
+                "LLL,LLLL",
+                "LL#,LL##",
+                "####",
+            ):
+                p1 = CandidatePreferences(strategy="randomized", charset_mode=charset, pattern=pattern, seed=1)
+                p2 = CandidatePreferences(strategy="exhaustive", charset_mode=charset, pattern=pattern, seed=999)
+                c1 = candidate_count(lengths, p1)
+                c2 = candidate_count(lengths, p2)
+                assert c1 == c2
+
+    # Verify sparse/priority agreement: duplicate and invalid priority names do not inflate candidate_count
+    prefs_prio = CandidatePreferences(
+        strategy="priority",
+        charset_mode="letters",
+        pattern="CVC",
+        priority_names=("cat", "cat", "bad..", "999", "zzzz", "dog"),
+    )
+    total = candidate_count((3,), prefs_prio)
+    # 2400 CVC 3-char names + 1 valid 3-char priority name outside CVC domain ("999") = 2401
+    assert total == 2401
+    first = next_generated_candidate((3,), 0, prefs_prio)
+    second = next_generated_candidate((3,), 1, prefs_prio)
+    third = next_generated_candidate((3,), 2, prefs_prio)
+    assert first == ("cat", 1)
+    assert second == ("999", 2)
+    assert third == ("dog", 3)
+    # Stepping cursor to exhaustion yields exactly `total` (2401) unique candidates
+    yielded = 0
+    cur = 0
+    while (step := next_generated_candidate((3,), cur, prefs_prio)) is not None:
+        _, cur = step
+        yielded += 1
+    assert yielded == total
+
+
+def test_custom_safety_margin_bucket_isolation_and_monotonic_deadline_sync(tmp_path):
+    clock = FakeClock(1000.0)
+    store = UsernameScanStore(tmp_path / "sched_precision.db", clock=clock)
+    transport = MagicMock()
+    transport.request.side_effect = [
+        MockResponse(status_code=429, json_data={"retry_after": 10.0}),
+        MockResponse(json_data={"taken": True}),
+    ]
+    # Custom safety_margin=1.5 with jitter=0 -> wait should be 10.0 + 1.5 = 11.5s (not 10.25s!)
