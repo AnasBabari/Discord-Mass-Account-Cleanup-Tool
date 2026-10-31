@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -15,7 +16,9 @@ from discord_cleanup.api.exceptions import (
 )
 from discord_cleanup.api.rate_limiter import GLOBAL_RATE_LIMITER, RequestCoordinator
 from discord_cleanup.models.domain import Guild, Relationship, RelationshipType, User
-from discord_cleanup.transport.http_transport import DEFAULT_TRANSPORT, Transport
+from discord_cleanup.models.usernames import ObservationOrigin, UsernameCheckResult, UsernameStatus, utc_now
+from discord_cleanup.security.token_sanitizer import sanitize_token
+from discord_cleanup.transport.http_transport import DEFAULT_TRANSPORT, RequestsTransport, Transport
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,11 @@ class DiscordApiClient:
         json_data: Any = None,
         token: str | None = None,
         cancel_event: threading.Event | None = None,
+        on_backoff: Callable[[float], None] | None = None,
+        *,
+        allow_redirects: bool | None = None,
+        can_dispatch_network: Callable[[], bool] | None = None,
+        on_network_request: Callable[[], None] | None = None,
     ) -> requests.Response:
         """Execute an authenticated Discord API request with coordinated rate-limit and backoff handling."""
         auth_token = token or self.token
@@ -88,15 +96,26 @@ class DiscordApiClient:
         while retries < self.max_retries:
             if not self.rate_limiter.wait(cancel_event):
                 raise RequestCancelledError("Operation cancelled while awaiting rate-limit clearance.")
+            if can_dispatch_network is not None and not can_dispatch_network():
+                raise RequestCancelledError("Network request budget or circuit limit reached.")
+            if on_network_request is not None:
+                on_network_request()
 
-            response = self.transport.request(
-                method=method,
-                url=url,
-                headers=headers,
-                params=params,
-                json_data=json_data,
-                cancel_event=cancel_event,
-            )
+            transport_kwargs: dict[str, Any] = {
+                "method": method,
+                "url": url,
+                "headers": headers,
+                "params": params,
+                "json_data": json_data,
+                "cancel_event": cancel_event,
+            }
+            if allow_redirects is not None and isinstance(self.transport, RequestsTransport):
+                transport_kwargs["allow_redirects"] = allow_redirects
+
+            response = self.transport.request(**transport_kwargs)
+
+            if endpoint == "/users/@me/pomelo-attempt" and "<html" in response.text.lower():
+                raise UpstreamBlockedError("Discord blocked the username check. The scan has been paused.")
 
             # Handle 429 Rate Limiting
             if response.status_code == 429:
@@ -109,6 +128,10 @@ class DiscordApiClient:
                 else:
                     try:
                         payload = response.json()
+                        if endpoint == "/users/@me/pomelo-attempt" and isinstance(payload, dict) and any(
+                            key.startswith("captcha_") for key in payload
+                        ):
+                            raise UpstreamBlockedError("Discord requires a verification challenge. The scan has been paused.")
                         if isinstance(payload, dict) and payload.get("retry_after") is not None:
                             wait_seconds = float(payload["retry_after"])
                     except (ValueError, TypeError):
@@ -122,6 +145,10 @@ class DiscordApiClient:
                 wait_seconds = max(0.0, wait_seconds)
                 logger.info("Rate-limited on %s %s - backing off for %.2fs", method, endpoint, wait_seconds)
                 self.rate_limiter.backoff(wait_seconds)
+                if on_backoff is not None:
+                    on_backoff(wait_seconds)
+                if can_dispatch_network is not None and not can_dispatch_network():
+                    raise RequestCancelledError("Network request budget reached.")
                 if not self.rate_limiter.delay(wait_seconds, cancel_event):
                     raise RequestCancelledError("Operation cancelled during rate-limit backoff delay.")
 
