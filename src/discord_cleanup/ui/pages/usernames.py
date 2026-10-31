@@ -345,3 +345,63 @@ class UsernamesPage(QWidget):
     def showEvent(self, event: Any) -> None:
         super().showEvent(event)
         self._check_live_expiry_transition()
+        self.update_cooldown()
+
+    def _check_live_expiry_transition(self) -> None:
+        if (
+            self.scan is not None
+            and self.account_id
+            and self._next_expiry_epoch is not None
+            and self.clock() >= self._next_expiry_epoch
+        ):
+            self._next_expiry_epoch = None
+            self.show_scan(refresh_results=True)
+
+    def current_preferences(self) -> CandidatePreferences:
+        return CandidatePreferences(
+            strategy=str(self.strategy_input.currentData() or "exhaustive"),
+            charset_mode=str(self.charset_input.currentData() or "all"),
+            pattern=str(self.pattern_input.currentData() or "any"),
+            seed=int(self.seed_input.value()),
+        )
+
+    def current_budget(self) -> RequestBudget | None:
+        max_net = int(self.budget_requests_input.value())
+        if max_net <= 0:
+            return None
+        return RequestBudget(max_network_requests=max_net)
+
+    def _active_scope(self) -> str:
+        if self.provider_input.currentData() == "public":
+            return PUBLIC_USERNAME_SCOPE
+        return self.account_id
+
+    def update_cooldown(self) -> None:
+        self._check_live_expiry_transition()
+        if self.provider_input.currentData() != "public":
+            self.cooldown_label.setText("Source: Signed-in Discord account")
+            self._refresh_metrics_label()
+            return
+        self.cooldown_label.setText("Source: Discord public check · no login required")
+        if self.account_id != PUBLIC_USERNAME_SCOPE:
+            return
+        try:
+            deadline, reason = self.store().cooldown(PUBLIC_CHECK_URL)
+            remaining = max(0, math.ceil(deadline - self.clock()))
+            if remaining and reason == "Rate limited":
+                retry = datetime.fromtimestamp(deadline, timezone.utc).strftime("%d %b %H:%M:%S UTC")
+                minutes, seconds = divmod(remaining, 60)
+                auto_resume = (
+                    "saved across restarts · resumes automatically while open"
+                    if (self.worker is not None and self.worker.isRunning())
+                    else "saved across restarts"
+                )
+                self.cooldown_label.setText(
+                    f"Public checker cooldown: {minutes}m {seconds:02}s · retry after {retry} · {auto_resume}"
+                )
+            self._last_cooldown_error = ""
+            self._refresh_metrics_label()
+        except Exception as exc:
+            self.cooldown_label.setText("Saved cooldown unavailable; checks will pause safely.")
+            if str(exc) != self._last_cooldown_error:
+                self._last_cooldown_error = str(exc)
