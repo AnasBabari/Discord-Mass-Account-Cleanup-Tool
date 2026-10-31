@@ -281,3 +281,61 @@ class UsernameScanStore:
                     connection.execute(
                         "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('migration_v3_complete', '1')"
                     )
+                    connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                    break
+
+                max_rowid = last_rowid
+                for row in rows:
+                    r_rowid = int(row["r_rowid"])
+                    max_rowid = max(max_rowid, r_rowid)
+                    username = str(row["username"]).lower()
+                    account_id = str(row["account_id"])
+                    provider = str(row["provider"]) or ("public" if account_id == PUBLIC_USERNAME_SCOPE else "account")
+                    status_val = str(row["status"])
+                    observed_at = str(row["checked_at"])
+                    obs_epoch = parse_utc_timestamp(observed_at)
+                    existing_exp_str = str(row["expires_at"] or "")
+                    existing_exp_epoch = parse_utc_timestamp(existing_exp_str) if existing_exp_str else None
+
+                    if obs_epoch is None:
+                        # Conservative treatment: malformed or unknown timestamps are marked expired/historical, never fresh!
+                        obs_epoch = 0.0
+                        exp_epoch = 0.0
+                        exp_at = format_utc_timestamp(0.0)
+                    elif existing_exp_epoch is not None:
+                        exp_epoch = existing_exp_epoch
+                        exp_at = existing_exp_str
+                    else:
+                        ttl = (
+                            policy.available_ttl_seconds
+                            if status_val == UsernameStatus.AVAILABLE.value
+                            else policy.unavailable_ttl_seconds
+                        )
+                        exp_epoch = obs_epoch + ttl
+                        exp_at = format_utc_timestamp(exp_epoch)
+
+                    connection.execute(
+                        "INSERT INTO observation_cache (username, provider, scope, status, observed_at, observed_epoch, "
+                        "expires_at, expires_epoch, message, provenance) VALUES (?,?,?,?,?,?,?,?,?,?) "
+                        "ON CONFLICT(username, provider, scope) DO UPDATE SET "
+                        "status = excluded.status, "
+                        "observed_at = excluded.observed_at, "
+                        "observed_epoch = excluded.observed_epoch, "
+                        "expires_at = excluded.expires_at, "
+                        "expires_epoch = excluded.expires_epoch, "
+                        "message = excluded.message, "
+                        "provenance = excluded.provenance "
+                        "WHERE excluded.observed_epoch > observation_cache.observed_epoch",
+                        (
+                            username,
+                            provider,
+                            account_id,
+                            status_val,
+                            observed_at,
+                            obs_epoch,
+                            exp_at,
+                            exp_epoch,
+                            str(row["message"]),
+                            "network",
+                        ),
+                    )
