@@ -115,3 +115,63 @@ def build_username_arg_parser() -> argparse.ArgumentParser:
         default="all",
         help="Character set filter for generated candidates.",
     )
+    parser.add_argument(
+        "--pattern",
+        default="any",
+        help="Pattern preference (any, pronounceable, starts_with_letter, no_edge_punctuation, palindrome, or template e.g. CVC, LLL).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Deterministic seed for randomized traversal (default: 42).",
+    )
+    parser.add_argument(
+        "--max-network-requests",
+        type=int,
+        default=None,
+        help="Stop cleanly after this many live network requests.",
+    )
+    parser.add_argument(
+        "--max-definitive-checks",
+        type=int,
+        default=None,
+        help="Stop cleanly after this many definitive availability results.",
+    )
+    parser.add_argument(
+        "--max-duration",
+        type=float,
+        default=None,
+        help="Stop cleanly after this many seconds of active run time.",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable reusing cached observations for this run.",
+    )
+    parser.add_argument(
+        "--force-recheck",
+        action="store_true",
+        help="Force fresh live network checks even if cached observations exist.",
+    )
+    parser.add_argument(
+        "--export",
+        dest="export_path",
+        default="",
+        help="Export scan results to the specified CSV path after checking.",
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Preview candidate count and sample ordering without sending network requests.",
+    )
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Print structured diagnostics and provider health summary and exit.",
+    )
+    parser.add_argument(
+        "--reset-health",
+        action="store_true",
+        help="Reset circuit-breaker pause state while preserving active server cooldowns.",
+    )
