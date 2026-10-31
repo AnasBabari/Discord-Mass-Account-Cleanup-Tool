@@ -175,3 +175,59 @@ def test_redirect_responses_rejected_before_and_after_following(tmp_path, status
     with pytest.raises(InvalidPayloadError, match="redirect"):
         client.check_username_availability("abc")
     assert store.get_cached_observation("abc", provider="public", scope=PUBLIC_USERNAME_SCOPE, now=clock.now) is None
+
+
+# ---------------------------------------------------------------------------
+# 2. Provider health state machine & circuit breaker + deliberate reset
+# ---------------------------------------------------------------------------
+
+
+def test_provider_health_transitions_and_deliberate_reset_preserves_cooldown(tmp_path):
+    clock = FakeClock(5000.0)
+    store = UsernameScanStore(tmp_path / "health.db")
+    transport = MagicMock()
+    client = PublicUsernameClient(store, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    # Initial state is READY
+    h0 = store.get_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert h0.state == ProviderHealthState.READY
+
+    # 1. Challenge / block -> BLOCKED_CHALLENGE
+    transport.request.return_value = MockResponse(status_code=403, text="Cloudflare challenge")
+    scan1 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    res1 = scanner.run(scan1.id, PUBLIC_USERNAME_SCOPE)
+    assert res1.status == "failed"
+    h_blocked = store.get_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert h_blocked.state == ProviderHealthState.BLOCKED_CHALLENGE
+
+    # 2. Save an active server cooldown, then reset health -> transitions to WAITING_COOLDOWN (cooldown preserved!)
+    store.save_cooldown(PUBLIC_CHECK_URL, 5500.0, "Rate limited")
+    h_reset_during_cd = store.reset_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert h_reset_during_cd.state == ProviderHealthState.WAITING_COOLDOWN
+    assert store.cooldown(PUBLIC_CHECK_URL)[0] == pytest.approx(5500.0)
+
+    # 3. Advance clock past cooldown, reset health -> READY
+    clock.now = 5600.0
+    h_ready = store.reset_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert h_ready.state == ProviderHealthState.READY
+
+    # 4. Uninterpretable response -> UNINTERPRETABLE_RESPONSE
+    transport.request.side_effect = None
+    transport.request.return_value = MockResponse(status_code=200, json_data={"unexpected": 123})
+    scan2 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["def"])
+    res2 = scanner.run(scan2.id, PUBLIC_USERNAME_SCOPE)
+    assert res2.status == "failed"
+    h_uninterp = store.get_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert h_uninterp.state == ProviderHealthState.UNINTERPRETABLE_RESPONSE
+
+    # Reset health before testing PAUSED_FAILURES so open circuit doesn't block scan3 pre-dispatch
+    store.reset_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+
+    # 5. Network failure after bounded retries -> PAUSED_FAILURES
+    transport.request.side_effect = NetworkError("Connection reset")
+    scan3 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["ghi"])
+    res3 = scanner.run(scan3.id, PUBLIC_USERNAME_SCOPE)
+    assert res3.status == "failed"
+    h_paused = store.get_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert h_paused.state == ProviderHealthState.PAUSED_FAILURES
