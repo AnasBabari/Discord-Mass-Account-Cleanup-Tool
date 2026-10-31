@@ -231,3 +231,63 @@ def test_provider_health_transitions_and_deliberate_reset_preserves_cooldown(tmp
     assert res3.status == "failed"
     h_paused = store.get_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
     assert h_paused.state == ProviderHealthState.PAUSED_FAILURES
+
+
+@pytest.mark.parametrize(
+    "blocked_state",
+    [
+        ProviderHealthState.BLOCKED_CHALLENGE,
+        ProviderHealthState.UNINTERPRETABLE_RESPONSE,
+        ProviderHealthState.PAUSED_FAILURES,
+    ],
+)
+def test_open_circuit_enforced_at_dispatch_boundary_across_scans_and_store_instances(tmp_path, blocked_state):
+    clock = FakeClock(5000.0)
+    store = UsernameScanStore(tmp_path / f"circuit_{blocked_state.value}.db", clock=clock)
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(json_data={"taken": False})
+    client = PublicUsernameClient(store, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    # Pre-cache "cached_ok" while healthy
+    store.save_cached_observation(
+        UsernameCheckResult("cat", UsernameStatus.AVAILABLE, format_utc_timestamp(clock.now)),
+        provider="public",
+        scope=PUBLIC_USERNAME_SCOPE,
+        now=clock.now,
+    )
+
+    # Trip circuit breaker
+    store.save_provider_health(
+        PUBLIC_USERNAME_SCOPE,
+        blocked_state,
+        f"Simulated {blocked_state.value}",
+        consecutive_failures=3,
+        now=clock.now,
+    )
+
+    # 1. Local invalid ("bad..") and fresh cache hit ("cat") STILL succeed while circuit is open;
+    #    live network check ("dog") stops immediately with 0 transport calls!
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["bad..", "cat", "dog"])
+    res = scanner.run(scan.id, PUBLIC_USERNAME_SCOPE)
+    assert res.status == "failed"
+    assert res.checked == 2  # "bad.." and "cat" completed; "dog" remained unconsumed at cursor 2
+    assert res.cursor == 2
+    assert res.cache_hits == 1
+    assert res.network_checks == 0
+    assert transport.request.call_count == 0
+
+    # 2. Resuming without resetting health dispatches 0 network calls
+    res_resume = scanner.run(scan.id, PUBLIC_USERNAME_SCOPE)
+    assert res_resume.status == "failed"
+    assert res_resume.checked == 2
+    assert transport.request.call_count == 0
+
+    # 3. Another client/process sharing the same SQLite database also dispatches 0 network calls
+    store2 = UsernameScanStore(store.path, clock=clock)
+    client2 = PublicUsernameClient(store2, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    with pytest.raises((UpstreamBlockedError, InvalidPayloadError, NetworkError), match="Simulated"):
+        client2.check_username_availability("dog")
+    assert transport.request.call_count == 0
+
+    # 4. Resetting health while an active server cooldown exists transitions to WAITING_COOLDOWN
