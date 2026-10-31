@@ -226,3 +226,62 @@ def test_cancel_while_another_process_has_request_slot(public_client):
     with client.store.public_request_lock(), pytest.raises(RequestCancelledError):
         client.check_username_availability("abc", cancel_event=event)
     client.transport.request.assert_not_called()
+
+
+def test_public_requests_are_serialized_across_clients(tmp_path):
+    store = UsernameScanStore(tmp_path / "public.db")
+    transport = MagicMock()
+    active = 0
+    peak = 0
+    mutex = threading.Lock()
+    start = threading.Barrier(2)
+
+    def request(*args, **kwargs):
+        nonlocal active, peak
+        with mutex:
+            active += 1
+            peak = max(active, peak)
+        time.sleep(0.02)
+        with mutex:
+            active -= 1
+        return MockResponse(json_data={"taken": True})
+
+    transport.request.side_effect = request
+    clients = [
+        PublicUsernameClient(UsernameScanStore(store.path), transport=transport, min_interval=0.02) for _ in range(2)
+    ]
+
+    def check(index):
+        start.wait(timeout=3)
+        return clients[index].check_username_availability("abc")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(check, (0, 1)))
+    assert len(results) == transport.request.call_count == 2
+    assert peak == 1
+
+
+def test_migration_preserves_old_account_results_and_adds_cooldowns(tmp_path):
+    path = tmp_path / "old.db"
+    original = UsernameScanStore(path)
+    scan = original.create_scan("old-account", mode="custom", names=["abc"])
+    original.save_result(scan.id, "old-account", UsernameCheckResult("abc", UsernameStatus.UNAVAILABLE, utc_now()), 1)
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE username_cooldowns")
+        connection.execute("PRAGMA user_version=1")
+    migrated = UsernameScanStore(path)
+    assert migrated.results(scan.id, "old-account", False)[1] == 1
+    assert migrated.list_scans(PUBLIC_USERNAME_SCOPE) == []
+    migrated.save_cooldown("public-route", 2009, "Rate limited")
+    assert migrated.cooldown("public-route") == (2009, "Rate limited")
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+def test_redirected_json_is_not_username_evidence(public_client):
+    client, _ = public_client
+    response = MockResponse(json_data={"taken": False})
+    response.url = "https://example.com/unrelated"
+    client.transport.request.return_value = response
+    with pytest.raises(InvalidPayloadError, match="redirected"):
+        client.check_username_availability("abc")
