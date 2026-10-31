@@ -703,3 +703,63 @@ class UsernamesPage(QWidget):
             return
 
         dialog = QDialog(self)
+        dialog.setWindowTitle("Username Checker Diagnostics")
+        dialog.resize(680, 440)
+        d_layout = QVBoxLayout(dialog)
+        text = QPlainTextEdit(dialog)
+        text.setReadOnly(True)
+        rate_str = (
+            f"{summary.effective_checks_per_minute:.2f} checks/min"
+            if summary.effective_checks_per_minute is not None
+            else "insufficient data"
+        )
+        lines = [
+            f"Scope / Provider: {scope}",
+            f"Provider Health: {summary.provider_health.state.label} ({summary.provider_health.reason or 'OK'})",
+            f"Total Network Requests: {summary.network_requests_total:,}",
+            f"Definitive Network Checks: {summary.definitive_network_checks:,}",
+            f"Total Cache Hits: {summary.total_cache_hits:,}",
+            f"Total Deduplicated Requests Avoided: {summary.total_deduplicated:,}",
+            f"Total Local Invalid Rejections: {summary.total_local_invalid:,}",
+            f"Cumulative Cooldown/Backoff Wait: {summary.total_wait_seconds:.1f}s",
+            f"Recent Definitive Successes (last 50): {summary.recent_success_count}",
+            f"Recent HTTP 429 Rate Limits (last 50): {summary.recent_rate_limit_count}",
+            f"Recent Failures / Challenges (last 50): {summary.recent_failure_count}",
+            f"Effective Live Network Rate: {rate_str}",
+            f"Realistic Remaining ETA: {summary.eta_label}",
+            "",
+            "--- Recent Diagnostic Events (Sanitized) ---",
+        ]
+        for entry in recent:
+            lines.append(
+                f"[{entry.completed_at}] {entry.username or '-'} | {entry.origin} | "
+                f"{entry.classification} | HTTP {entry.http_status or '-'} | "
+                f"wait={entry.wait_seconds:.1f}s | {entry.detail}"
+            )
+        text.setPlainText("\n".join(lines))
+        d_layout.addWidget(text)
+        close_btn = QPushButton("Close", dialog)
+        close_btn.clicked.connect(dialog.accept)
+        d_layout.addWidget(close_btn)
+        dialog.exec_()
+
+    def pause_scan(self) -> None:
+        if self.worker is not None:
+            self.worker.cancel()
+            self.pause_btn.setEnabled(False)
+            self.status_label.setText("Pausing; waiting for any active request to finish...")
+
+    def on_account(self, account_id: str, scans: list[UsernameScan]) -> None:
+        self.account_id = account_id
+        self.update_cooldown()
+        selected = self.scan.id if self.scan else None
+        self.history_input.blockSignals(True)
+        self.history_input.clear()
+        for scan in scans:
+            self.history_input.addItem(
+                f"{scan.created_at} · {scan.mode} · {scan.checked:,}/{scan.total:,} · {scan.status}", scan.id
+            )
+        index = self.history_input.findData(selected)
+        self.history_input.setCurrentIndex(max(0, index) if scans else -1)
+        self.history_input.blockSignals(False)
+        self.select_scan()
