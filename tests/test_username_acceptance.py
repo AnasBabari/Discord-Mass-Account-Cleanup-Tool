@@ -582,3 +582,62 @@ def test_subsecond_same_second_recheck_accepted_and_10ms_older_cache_rejected(tm
 
     scan = scanner.recheck_names(PUBLIC_USERNAME_SCOPE, ["abc"])
     holder.join(timeout=1.0)
+
+    # The 10ms-older cached observation (1700000000.24 < 1700000000.25) was rejected,
+    # and the new observation at 1700000000.75 (same integer second!) was accepted!
+    assert transport.request.call_count == 1
+    assert scan.status == "completed"
+    assert scan.available == 1
+    rows, _ = store.results(scan.id, PUBLIC_USERNAME_SCOPE, available_only=True, now=clock())
+    assert len(rows) == 1
+    assert rows[0].effective_observed_epoch() == pytest.approx(1_700_000_000.75)
+
+
+# ===========================================================================
+# Section 5: Live Desktop Freshness Transitions in UsernamesPage
+# ===========================================================================
+
+
+def test_desktop_ui_live_freshness_transitions_idle_paused_waiting_and_page_switch(
+    qtbot: Any, monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Visible table rows, filters, counts, copy, and CSV transition from fresh to historical as clock advances."""
+    clock = FakeClock(10_000.0)
+    store_path = tmp_path / "ui_live_expiry.db"
+    store = UsernameScanStore(store_path, clock=clock)
+    policy = CacheFreshnessPolicy(available_ttl_seconds=300.0, unavailable_ttl_seconds=3600.0)
+
+    transport = MagicMock()
+    transport.request.side_effect = [
+        MockResponse(json_data={"taken": False}),  # "cat" available at t=10000 (expires 10300)
+        MockResponse(json_data={"taken": True}),   # "dog" unavailable at t=10000 (expires 13600)
+    ]
+    client = PublicUsernameClient(
+        store, transport=transport, min_interval=0.0, clock=clock, wait=clock.wait, freshness_policy=policy
+    )
+    scanner = UsernameScanner(store, client, freshness_policy=policy, clock=clock, monotonic=clock)
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["cat", "dog"])
+    scanner.run(scan.id, PUBLIC_USERNAME_SCOPE)
+    assert transport.request.call_count == 2
+
+    page = UsernamesPage(store_path=store_path, clock=clock)
+    page.resize(1000, 680)
+    qtbot.addWidget(page)
+    page.on_account(PUBLIC_USERNAME_SCOPE, store.list_scans(PUBLIC_USERNAME_SCOPE))
+
+    # 1. At t=10100 (fresh): "cat" is fresh available
+    clock.now = 10_100.0
+    page.update_cooldown()
+    assert "1 available" in page.status_label.text()
+    assert "historical" not in page.status_label.text()
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 0).text() == "cat"
+    assert page.table.item(0, 1).text() == "available"
+
+    # Switch to "All results": both "cat" (available) and "dog" (unavailable) are fresh
+    page.filter_input.setCurrentIndex(1)  # All results
+    assert page.table.rowCount() == 2
+    statuses_fresh = {page.table.item(r, 0).text(): page.table.item(r, 1).text() for r in range(page.table.rowCount())}
+    assert statuses_fresh == {"cat": "available", "dog": "unavailable"}
+
+    # Verify idle timer ticks before expiry (t=10200 < 10300) do NOT re-query SQLite results
