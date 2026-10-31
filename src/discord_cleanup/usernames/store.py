@@ -626,3 +626,45 @@ class UsernameScanStore:
         if result.origin in (ObservationOrigin.CACHE.value, ObservationOrigin.STALE_CACHE.value):
             return result.with_clock(bound_clock)
         freshness = policy or CacheFreshnessPolicy()
+        ttl = freshness.ttl_for_status(result.status)
+        if ttl <= 0:
+            return result.with_clock(bound_clock)
+
+        if result.observed_epoch is not None and math.isfinite(result.observed_epoch) and result.observed_epoch > 0.0:
+            obs_epoch = float(result.observed_epoch)
+            observed_at = result.checked_at or format_utc_timestamp(obs_epoch)
+        elif result.checked_at:
+            parsed_obs = parse_utc_timestamp(result.checked_at)
+            if parsed_obs is None:
+                # Malformed observation timestamp: treat conservatively as expired/historical, never fresh!
+                obs_epoch = 0.0
+                observed_at = result.checked_at
+            else:
+                if now is not None and math.isfinite(now) and int(float(now)) == int(parsed_obs):
+                    obs_epoch = float(now)
+                else:
+                    obs_epoch = parsed_obs
+                observed_at = result.checked_at
+        else:
+            obs_epoch = float(self.clock()) if now is None else float(now)
+            observed_at = format_utc_timestamp(obs_epoch)
+
+        if obs_epoch <= 0.0:
+            exp_epoch = 0.0
+            exp_str = format_utc_timestamp(0.0)
+        elif result.expires_epoch is not None and math.isfinite(result.expires_epoch) and result.expires_epoch > 0.0:
+            exp_epoch = float(result.expires_epoch)
+            exp_str = result.expires_at or format_utc_timestamp(exp_epoch)
+        elif result.expires_at:
+            parsed_exp = parse_utc_timestamp(result.expires_at)
+            if parsed_exp is not None:
+                exp_epoch = parsed_exp
+                exp_str = result.expires_at
+            else:
+                exp_epoch = 0.0
+                exp_str = format_utc_timestamp(0.0)
+        else:
+            exp_epoch = obs_epoch + ttl
+            exp_str = format_utc_timestamp(exp_epoch)
+
+        clean_msg = sanitize_token(result.message)
