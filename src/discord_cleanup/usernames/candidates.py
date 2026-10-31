@@ -114,3 +114,63 @@ def _matches_template(name: str, template: str) -> bool:
         elif spec == "L":
             if not ("a" <= char <= "z"):
                 return False
+        elif spec in ("D", "#"):
+            if not ("0" <= char <= "9"):
+                return False
+        elif spec == "V":
+            if char not in VOWELS:
+                return False
+        elif spec == "C":
+            if char not in CONSONANTS:
+                return False
+        else:
+            if char != spec.lower():
+                return False
+    return True
+
+
+def matches_pattern(name: str, pattern: str = "any") -> bool:
+    if ".." in name:
+        return False
+    cleaned = (pattern or "any").strip()
+    if cleaned in ("", "any"):
+        return True
+    if cleaned == "pronounceable":
+        return _is_pronounceable(name)
+    if cleaned == "starts_with_letter":
+        return "a" <= name[0] <= "z"
+    if cleaned == "no_edge_punctuation":
+        return name[0] not in "_." and name[-1] not in "_."
+    if cleaned == "palindrome":
+        return name == name[::-1] or len(set(name)) <= 2
+    templates = [t.strip() for t in cleaned.split(",") if t.strip()]
+    if not templates:
+        return True
+    return any(_matches_template(name, t) for t in templates)
+
+
+def preference_score(name: str) -> tuple[int, int, int, int]:
+    """Preference heuristic score (lower tuple sorts earlier).
+
+    Ranks valid names first, shorter 3-character names before 4-character names,
+    clean letter-only and pronounceable handles before numeric/punctuation handles.
+    This is strictly a user-utility ordering heuristic, not an availability prediction.
+    """
+    invalid = 1 if validate_username(name) else 0
+    length_rank = len(name)
+    has_punct = 1 if ("_" in name or "." in name) else 0
+    has_digit = 1 if any("0" <= c <= "9" for c in name) else 0
+    readability_rank = 0 if _is_pronounceable(name) else (1 if not has_punct and not has_digit else 2 + has_punct)
+    return (invalid, length_rank, readability_rank, has_punct + has_digit)
+
+
+def rank_candidates_by_preference(names: list[str]) -> list[str]:
+    """Order candidate names by explicit user-utility preference heuristic with stable tie-breaking."""
+    indexed = list(enumerate(names))
+    indexed.sort(key=lambda item: (preference_score(item[1]), item[0]))
+    return [name for _, name in indexed]
+
+
+def _feistel_round(right: int, round_index: int, seed: int) -> int:
+    payload = f"{seed}:{round_index}:{right}".encode("ascii")
+    digest = hashlib.blake2s(payload, digest_size=4).digest()
