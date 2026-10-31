@@ -523,3 +523,62 @@ def test_ordinary_check_joined_by_forced_recheck_enforces_fresh_live_observation
     scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
 
     # Hold the candidate lock briefly so Consumer A (with use_cache=False) and Consumer B (force_recheck=True) coalesce
+    cand_lock = store.candidate_inflight_lock(PUBLIC_USERNAME_SCOPE, "abc")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        with cand_lock:
+            fut_a = pool.submit(scanner_a.run, scan_a.id, PUBLIC_USERNAME_SCOPE, use_cache=False, force_recheck=False)
+            time.sleep(0.03)
+            fut_b = pool.submit(scanner_b.recheck_names, PUBLIC_USERNAME_SCOPE, ["abc"])
+            time.sleep(0.04)
+        res_a = fut_a.result(timeout=2.0)
+        res_b = fut_b.result(timeout=2.0)
+
+    # Even though `waited_for_process_lock` was True when `cand_lock` released, the cached observation from
+    # `older_epoch` predated Consumer B's `request_started_epoch`, so a live network check was forced!
+    assert transport.request.call_count == 1
+    assert res_a.available == 1
+    assert res_b.available == 1
+
+
+def test_subsecond_same_second_recheck_accepted_and_10ms_older_cache_rejected(tmp_path: Path) -> None:
+    """Observations completed in the same integer second (>= start) are accepted; 10ms older cache is rejected."""
+    clock = FakeClock(1_700_000_000.25)
+    store = UsernameScanStore(tmp_path / "subsecond.db", clock=clock)
+
+    # 1. Create a cached observation at 1700000000.24 (10ms BEFORE 1700000000.25, in the same integer second!)
+    obs_10ms_before = 1_700_000_000.24
+    store.save_cached_observation(
+        UsernameCheckResult(
+            "abc",
+            UsernameStatus.UNAVAILABLE,
+            format_utc_timestamp(obs_10ms_before),
+            observed_epoch=obs_10ms_before,
+        ),
+        provider="public",
+        scope=PUBLIC_USERNAME_SCOPE,
+        now=obs_10ms_before,
+    )
+
+    def live_dispatch(*args: Any, **kwargs: Any) -> MockResponse:
+        # Advance clock by 0.50s to 1700000000.75 (still inside integer second 1700000000!)
+        clock.advance(0.50)
+        return MockResponse(status_code=200, json_data={"taken": False})
+
+    transport = MagicMock()
+    transport.request.side_effect = live_dispatch
+    client = PublicUsernameClient(store, transport=transport, min_interval=0.0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    # Hold candidate lock once on another thread so `waited_for_process_lock` triggers cross-process cache inspection
+    cand_lock = store.candidate_inflight_lock(PUBLIC_USERNAME_SCOPE, "abc")
+
+    def hold_briefly() -> None:
+        with cand_lock:
+            time.sleep(0.04)
+
+    holder = threading.Thread(target=hold_briefly)
+    holder.start()
+    time.sleep(0.01)
+
+    scan = scanner.recheck_names(PUBLIC_USERNAME_SCOPE, ["abc"])
+    holder.join(timeout=1.0)
