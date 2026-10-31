@@ -432,6 +432,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.cancel_all_workers()
+        if any(isinstance(worker, (UsernameScanWorker, UsernameResultsWorker)) and worker.isRunning() for worker in self.active_workers):
+            event.ignore()
+            self.usernames_page.pause_scan()
+            QTimer.singleShot(100, self.close)
+            return
         for worker in list(self.active_workers):
             worker.wait(1000)
         event.accept()
