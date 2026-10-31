@@ -1513,5 +1513,9 @@ class UsernameScanStore:
                     writer.writerow(
                         ["'" + cell if cell.startswith(("=", "+", "-", "@", "\t", "\r")) else cell for cell in cells]
                     )
+            if cancel_event is not None and cancel_event.is_set():
+                raise RequestCancelledError("Username export cancelled.")
+            os.replace(temporary, destination)
         finally:
-            pass
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
