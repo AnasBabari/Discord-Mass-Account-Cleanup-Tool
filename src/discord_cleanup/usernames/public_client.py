@@ -335,3 +335,63 @@ class PublicUsernameClient:
 
     def _save_response_cooldown(self, response: Any, payload: Any) -> RateLimitMetadata:
         now = self.clock()
+        metadata = parse_rate_limit_metadata(
+            response,
+            payload,
+            now,
+            safety_margin=self.safety_margin,
+            positive_jitter=self._compute_jitter(),
+        )
+        if metadata.effective_delay > 0:
+            self._record_deadline(
+                metadata.effective_delay,
+                metadata.reason or "Rate limited",
+                bucket=metadata.bucket,
+                is_global=metadata.is_global,
+            )
+        return metadata
+
+    def _sync_and_enforce_circuit_ready(self) -> None:
+        health = self.store.get_provider_health(self.scope, route=self.url, now=self.clock())
+        self._consecutive_failures = max(0, int(health.consecutive_failures))
+        self._consecutive_rate_limits = max(0, int(health.consecutive_rate_limits))
+        if not health.is_circuit_open:
+            return
+        reason = health.reason or f"Provider circuit breaker is open ({health.state.label}). Reset health before retrying."
+        if health.state == ProviderHealthState.BLOCKED_CHALLENGE:
+            raise UpstreamBlockedError(reason)
+        if health.state == ProviderHealthState.UNINTERPRETABLE_RESPONSE:
+            raise InvalidPayloadError(reason)
+        raise NetworkError(reason)
+
+    @staticmethod
+    def _is_redirect_response(response: Any, expected_url: str) -> bool:
+        status_code = getattr(response, "status_code", 200)
+        if isinstance(status_code, int) and 300 <= status_code < 400:
+            return True
+        if getattr(response, "is_redirect", False) is True or getattr(response, "is_permanent_redirect", False) is True:
+            return True
+        raw_headers = getattr(response, "headers", None) or {}
+        headers = {str(k).lower(): str(v) for k, v in raw_headers.items()}
+        if headers.get("location"):
+            return True
+        final_url = getattr(response, "url", expected_url)
+        if isinstance(final_url, str) and final_url.rstrip("/") != expected_url.rstrip("/"):
+            return True
+        return False
+
+    def check_username_availability(
+        self,
+        username: str,
+        cancel_event: threading.Event | None = None,
+        on_backoff: Callable[[float], None] | None = None,
+        *,
+        scan_id: str = "",
+        use_cache: bool = False,
+        force_recheck: bool = False,
+        on_network_request: Callable[[], None] | None = None,
+        can_dispatch_network: Callable[[], bool] | None = None,
+        max_wait_deadline_mono: float | Callable[[], float | None] | None = None,
+    ) -> UsernameCheckResult:
+        event = cancel_event if cancel_event is not None else threading.Event()
+        self._cancel_if_needed(event)
