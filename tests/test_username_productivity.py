@@ -826,3 +826,33 @@ def test_sqlite_migration_on_copy_of_legacy_schema(tmp_path):
     assert scan.cursor == 1
     assert scan.checked == 1
     assert scan.total == 2135677
+    assert scan.status == "paused"
+    assert scan.generator_version == 1
+
+    # Verify cooldown survived intact
+    cd_at, cd_reason = migrated.cooldown(PUBLIC_CHECK_URL)
+    assert cd_at == pytest.approx(1793440080.00228)
+    assert cd_reason == "Rate limited"
+
+    # Verify existing definitive result was backfilled into observation_cache!
+    cached = migrated.get_cached_observation(
+        "aaa",
+        provider="public",
+        scope=PUBLIC_USERNAME_SCOPE,
+        now=1793437926.0,  # 1 second after 2026-10-31T09:12:05+00:00
+    )
+    assert cached is not None
+    assert cached.status == UsernameStatus.UNAVAILABLE
+    assert cached.checked_at == "2026-10-31T09:12:05+00:00"
+    with sqlite3.connect(db_file) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+# ---------------------------------------------------------------------------
+# 10. Hardened regression tests: migration, freshness, budgets, concurrency,
+#     fast DP candidate counts, scheduler isolation, and diagnostics trimming
+# ---------------------------------------------------------------------------
+
+
+def test_migration_runs_once_preserves_expires_at_and_handles_malformed_timestamps(tmp_path):
+    db_file = tmp_path / "migration_edge.sqlite3"
