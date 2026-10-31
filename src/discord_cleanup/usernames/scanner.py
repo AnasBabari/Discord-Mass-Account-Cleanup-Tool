@@ -110,3 +110,61 @@ class _InFlightEntry:
         self.total_attempts_committed = 0
         self.cross_process_dedup = False
         self.last_committer_slot: _WaiterSlot | None = None
+        self.worker_thread: threading.Thread | None = None
+        self.result: UsernameCheckResult | None = None
+        self.error: BaseException | None = None
+        self._sync_shared_cancel_unlocked()
+
+    def add_waiter(self, slot: _WaiterSlot) -> bool:
+        with self.lock:
+            if self.done.is_set():
+                return False
+            self.slots.append(slot)
+            if slot.force_recheck:
+                self.allow_cache = False
+            self._sync_shared_cancel_unlocked()
+            return True
+
+    def remove_waiter(self, slot: _WaiterSlot) -> None:
+        with self.lock:
+            slot.cancel_event.set()
+            if slot in self.slots:
+                self.slots.remove(slot)
+            self._sync_shared_cancel_unlocked()
+
+    def sync_cancel(self) -> None:
+        with self.lock:
+            self._sync_shared_cancel_unlocked()
+
+    def active_scan_id(self, fallback: str = "") -> str:
+        with self.lock:
+            for slot in self.slots:
+                if slot.is_active() and slot.scan_id:
+                    return slot.scan_id
+            return fallback
+
+    def required_observed_epoch(self) -> float | None:
+        with self.lock:
+            self._sync_shared_cancel_unlocked()
+            epochs = [s.request_started_epoch for s in self.slots if s.is_active() and s.force_recheck]
+            return max(epochs) if epochs else None
+
+    def effective_deadline_mono(self) -> float | None:
+        with self.lock:
+            self._sync_shared_cancel_unlocked()
+            active = [s for s in self.slots if s.is_active()]
+            if not active:
+                self.shared_cancel.set()
+                return 0.0
+            if any(s.max_wait_deadline_mono is None for s in active):
+                return None
+            return max(s.max_wait_deadline_mono for s in active if s.max_wait_deadline_mono is not None)
+
+    def notify_backoff(self, seconds: float) -> None:
+        with self.lock:
+            callbacks = [s.on_backoff for s in self.slots if s.is_active() and s.on_backoff is not None]
+        for cb in callbacks:
+            try:
+                cb(seconds)
+            except Exception:
+                pass
