@@ -759,3 +759,52 @@ class _MockDiscordServer:
         self.release_first_request.set()
         self.server.shutdown()
         self.server.server_close()
+        self.thread.join(timeout=2.0)
+
+
+def test_multiprocess_scan_busy_and_cross_process_candidate_dedup(tmp_path: Path) -> None:
+    """Independent Python processes:
+    1) Cannot run the same saved scan concurrently (`ScanBusyError`).
+    2) Share a single live network request via `candidate_inflight_lock` + `observation_cache` when checking
+       the same candidate in separate scans.
+    """
+    server = _MockDiscordServer()
+    server.hold_first_request = True
+    db_path = tmp_path / "multiproc_dedup.db"
+    store = UsernameScanStore(db_path)
+    scan1 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan2 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+
+    worker_code = textwrap.dedent(
+        """
+        import json, pathlib, sys
+        from discord_cleanup.models.usernames import PUBLIC_USERNAME_SCOPE
+        from discord_cleanup.transport.http_transport import RequestsTransport
+        from discord_cleanup.usernames.public_client import PublicUsernameClient
+        from discord_cleanup.usernames.scanner import ScanBusyError, UsernameScanner
+        from discord_cleanup.usernames.store import UsernameScanStore
+
+        db_path, base_url, scan_id = sys.argv[1], sys.argv[2], sys.argv[3]
+        ready_file = sys.argv[4] if len(sys.argv) > 4 else ""
+        store = UsernameScanStore(db_path)
+        transport = RequestsTransport()
+        try:
+            client = PublicUsernameClient(store, transport=transport, base_url=base_url, min_interval=0.0, safety_margin=0.0, jitter=0.0)
+            scanner = UsernameScanner(store, client)
+            if ready_file:
+                pathlib.Path(ready_file).write_text("ready", encoding="utf-8")
+            res = scanner.run(scan_id, PUBLIC_USERNAME_SCOPE)
+            print(json.dumps({
+                "ok": True,
+                "status": res.status,
+                "checked": res.checked,
+                "available": res.available,
+                "network_checks": res.network_checks,
+                "deduplicated_hits": res.deduplicated_hits,
+            }))
+        except ScanBusyError as exc:
+            print(json.dumps({"ok": False, "busy": True, "error": str(exc)}))
+        finally:
+            transport.close()
+        """
+    )
