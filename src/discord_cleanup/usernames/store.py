@@ -822,3 +822,61 @@ class UsernameScanStore:
                 "FROM diagnostics_counters WHERE scope=?",
                 (scope,),
             ).fetchone()
+            if existing is None or float(existing["last_interval_end"]) <= 0.0:
+                active_delta = max(0.0, end_ep - start_ep)
+                new_int_start = start_ep
+                new_int_end = end_ep
+            else:
+                last_start = float(existing["last_interval_start"])
+                last_end = float(existing["last_interval_end"])
+                if start_ep > last_end:
+                    gap = start_ep - last_end
+                    if gap <= 5.0:
+                        active_delta = max(0.0, end_ep - last_end)
+                        new_int_start = last_start
+                        new_int_end = end_ep
+                    else:
+                        active_delta = max(0.0, end_ep - start_ep)
+                        new_int_start = start_ep
+                        new_int_end = end_ep
+                else:
+                    # Overlapping concurrent interval: only add non-overlapping tail beyond last_end
+                    active_delta = max(0.0, end_ep - last_end)
+                    new_int_start = min(last_start, start_ep)
+                    new_int_end = max(last_end, end_ep)
+
+            connection.execute(
+                "INSERT INTO diagnostics_counters ("
+                "scope, definitive_network_checks, cached_reused, dedup_avoided, local_invalid_avoided, "
+                "wait_seconds_total, network_requests_total, rate_limit_responses_total, error_responses_total, "
+                "active_duration_seconds, first_started_at, last_completed_at, last_interval_start, last_interval_end"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET "
+                "definitive_network_checks = definitive_network_checks + excluded.definitive_network_checks, "
+                "cached_reused = cached_reused + excluded.cached_reused, "
+                "dedup_avoided = dedup_avoided + excluded.dedup_avoided, "
+                "local_invalid_avoided = local_invalid_avoided + excluded.local_invalid_avoided, "
+                "wait_seconds_total = wait_seconds_total + excluded.wait_seconds_total, "
+                "network_requests_total = network_requests_total + excluded.network_requests_total, "
+                "rate_limit_responses_total = rate_limit_responses_total + excluded.rate_limit_responses_total, "
+                "error_responses_total = error_responses_total + excluded.error_responses_total, "
+                "active_duration_seconds = active_duration_seconds + excluded.active_duration_seconds, "
+                "last_completed_at = excluded.last_completed_at, "
+                "last_interval_start = excluded.last_interval_start, "
+                "last_interval_end = excluded.last_interval_end",
+                (
+                    scope,
+                    is_definitive_net,
+                    is_cached,
+                    is_dedup,
+                    is_local_invalid,
+                    safe_wait,
+                    is_net_req,
+                    is_rl,
+                    is_err,
+                    active_delta,
+                    start_ts,
+                    end_ts,
+                    new_int_start,
+                    new_int_end,
+                ),
+            )
