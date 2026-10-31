@@ -218,6 +218,24 @@ class DiscordApiClient:
             raise UpstreamBlockedError("Discord requires a verification challenge. The scan has been paused.")
         if response.status_code == 200 and type(data.get("taken")) is bool:
             status = UsernameStatus.UNAVAILABLE if data["taken"] else UsernameStatus.AVAILABLE
+            return UsernameCheckResult(
+                username, status, utc_now(), origin=ObservationOrigin.NETWORK.value, provider="account"
+            )
+        errors = data.get("errors")
+        if response.status_code == 400 and isinstance(errors, dict) and errors.get("username"):
+            return UsernameCheckResult(
+                username,
+                UsernameStatus.INVALID,
+                utc_now(),
+                "Discord rejected this username.",
+                origin=ObservationOrigin.NETWORK.value,
+                provider="account",
+            )
+        message = sanitize_token(get_clean_error(response))
+        if self.token:
+            message = message.replace(self.token, "[REDACTED_TOKEN]")
+        raise InvalidPayloadError(f"Username check failed (HTTP {response.status_code}): {message}")
+
     def verify_token(self, token: str | None = None, cancel_event: threading.Event | None = None) -> User:
         """Verify authentication token against /users/@me and return authenticated User domain model."""
         response = self.request("GET", "/users/@me", token=token, cancel_event=cancel_event)
