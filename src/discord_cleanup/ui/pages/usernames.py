@@ -405,3 +405,62 @@ class UsernamesPage(QWidget):
             self.cooldown_label.setText("Saved cooldown unavailable; checks will pause safely.")
             if str(exc) != self._last_cooldown_error:
                 self._last_cooldown_error = str(exc)
+                self.on_error(str(exc))
+
+    def _refresh_metrics_label(self) -> None:
+        scope = self._active_scope()
+        if not scope:
+            return
+        try:
+            now = self.clock()
+            route = PUBLIC_CHECK_URL if scope == PUBLIC_USERNAME_SCOPE else "/users/@me/pomelo-attempt"
+            remaining_cands = max(0, self.scan.total - self.scan.checked) if self.scan else 0
+            health = self._last_health or self.store().get_provider_health(scope, route=route, now=now)
+            diag = self._last_diagnostics or self.store().diagnostics_summary(
+                scope, remaining_candidates=remaining_cands, route=route, now=now
+            )
+            net_checks = self.scan.network_checks if self.scan else diag.total_network_checks
+            cache_hits = self.scan.cache_hits if self.scan else diag.total_cache_hits
+            deduped = self.scan.deduplicated_hits if self.scan else diag.total_deduplicated
+            rate_str = (
+                f"{diag.effective_checks_per_minute:.2f}/min"
+                if diag.effective_checks_per_minute is not None
+                else "insufficient data"
+            )
+            eta_part = f" · ETA: {diag.eta_label}" if self.scan and self.scan.status != "completed" else ""
+            pause_part = (
+                f" · Pause: {self.scan.pause_reason}"
+                if (self.scan and self.scan.pause_reason and self.scan.status in ("paused", "failed"))
+                else ""
+            )
+            self.metrics_label.setText(
+                f"Health: {health.state.label} · Net checks: {net_checks:,} · Cache hits: {cache_hits:,} · "
+                f"Deduped: {deduped:,} · Rate: {rate_str}{eta_part}{pause_part}"
+            )
+        except Exception:
+            pass
+
+    def update_mode(self) -> None:
+        mode = self.mode_input.currentData()
+        custom = mode == "custom"
+        generated = mode == "generated"
+        if custom:
+            self.length_input.setCurrentIndex(0)
+        self.custom_input.setVisible(custom)
+        self.length_input.setEnabled(generated)
+        self.charset_input.setEnabled(generated)
+        self.pattern_input.setEnabled(generated)
+        self.seed_input.setEnabled(generated or custom)
+        self.update_estimate()
+
+    def update_estimate(self) -> None:
+        self._preview_generation += 1
+        generation = self._preview_generation
+        mode = self.mode_input.currentData()
+        prefs = self.current_preferences()
+        if mode == "custom":
+            names = parse_custom_names(self.custom_input.toPlainText())
+            preview = preview_candidates("custom", (3, 4), names, prefs, sample_size=6)
+            if generation != self._preview_generation:
+                return
+            sample_str = f" · First: {', '.join(preview.sample_candidates)}" if preview.sample_candidates else ""
