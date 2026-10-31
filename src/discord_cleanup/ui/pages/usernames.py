@@ -226,3 +226,62 @@ class UsernamesPage(QWidget):
         self.start_btn.setObjectName("ActionBtn")
         self.start_btn.clicked.connect(self.start_scan)
         self.pause_btn = QPushButton("Pause")
+        self.pause_btn.setAccessibleName("Pause active scan")
+        self.pause_btn.clicked.connect(self.pause_scan)
+        self.resume_btn = QPushButton("Resume Selected")
+        self.resume_btn.setAccessibleName("Resume selected scan")
+        self.resume_btn.clicked.connect(self.resume_scan)
+        self.recheck_btn = QPushButton("Fresh Recheck")
+        self.recheck_btn.setAccessibleName("Run fresh live recheck")
+        self.recheck_btn.setToolTip("Force a fresh live network check for selected or custom usernames.")
+        self.recheck_btn.clicked.connect(self.recheck_selected)
+        self.watchlist_add_btn = QPushButton("+ Watchlist")
+        self.watchlist_add_btn.setAccessibleName("Add usernames to watchlist")
+        self.watchlist_add_btn.setToolTip("Save custom or selected usernames to the persistent watchlist.")
+        self.watchlist_add_btn.clicked.connect(self.add_selected_to_watchlist)
+        self.reset_health_btn = QPushButton("Reset Health")
+        self.reset_health_btn.setAccessibleName("Reset provider health circuit breaker")
+        self.reset_health_btn.setToolTip("Clear circuit-breaker pause state while preserving active server cooldowns.")
+        self.reset_health_btn.clicked.connect(self.reset_provider_health)
+        self.diagnostics_btn = QPushButton("Diagnostics")
+        self.diagnostics_btn.setAccessibleName("View username checker diagnostics")
+        self.diagnostics_btn.clicked.connect(self.show_diagnostics_dialog)
+
+        for button in (
+            self.start_btn,
+            self.pause_btn,
+            self.resume_btn,
+            self.recheck_btn,
+            self.watchlist_add_btn,
+            self.reset_health_btn,
+            self.diagnostics_btn,
+        ):
+            controls.addWidget(button)
+        layout.addLayout(controls)
+
+        history = QHBoxLayout()
+        self.history_input = QComboBox()
+        self.history_input.setAccessibleName("Saved scans")
+        self.history_input.setPlaceholderText("Load saved scans to resume")
+        self.history_input.currentIndexChanged.connect(self.select_scan)
+        self.refresh_btn = QPushButton("Load Saved Scans")
+        self.refresh_btn.setAccessibleName("Load saved scans")
+        self.refresh_btn.clicked.connect(self.load_scans)
+        history.addWidget(self.history_input, 1)
+        history.addWidget(self.refresh_btn)
+        layout.addLayout(history)
+
+        self.status_label = QLabel("Ready. Start a new scan or load saved progress.")
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        self.cooldown_label = QLabel("Source: Discord public check · no login required")
+        self.cooldown_label.setWordWrap(True)
+        layout.addWidget(self.cooldown_label)
+
+        self.metrics_label = QLabel(
+            "Health: Ready · Net checks: 0 · Cache hits: 0 · Deduped: 0 · Effective rate: insufficient data"
+        )
+        self.metrics_label.setWordWrap(True)
+        layout.addWidget(self.metrics_label)
