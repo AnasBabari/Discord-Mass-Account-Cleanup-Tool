@@ -464,3 +464,63 @@ class UsernamesPage(QWidget):
             if generation != self._preview_generation:
                 return
             sample_str = f" · First: {', '.join(preview.sample_candidates)}" if preview.sample_candidates else ""
+            self.estimate_label.setText(
+                f"{len(names):,} unique entries ({preview.valid_custom_count:,} valid, "
+                f"{preview.invalid_custom_count:,} invalid reported locally){sample_str}."
+            )
+        elif mode == "watchlist":
+            try:
+                scope = self._active_scope() or PUBLIC_USERNAME_SCOPE
+                wl_entries = self.store().list_watchlist(scope)
+                if generation != self._preview_generation:
+                    return
+                wl = [str(item["username"]) if isinstance(item, dict) else str(item) for item in wl_entries]
+                sample = ", ".join(wl[:6])
+                self.estimate_label.setText(
+                    f"Watchlist: {len(wl):,} saved candidate(s){' (' + sample + ')' if sample else ''}. "
+                    "Rechecks stale entries first while respecting cache freshness."
+                )
+            except Exception:
+                if generation == self._preview_generation:
+                    self.estimate_label.setText("Watchlist mode checks saved priority usernames.")
+        else:
+            lengths = tuple(self.length_input.currentData())
+            if prefs.is_default_exhaustive():
+                count = candidate_count(lengths)
+                preview = preview_candidates("generated", lengths, [], prefs, sample_size=5)
+                if generation != self._preview_generation:
+                    return
+                sample_str = ", ".join(preview.sample_candidates)
+                self.estimate_label.setText(
+                    f"{count:,} names using a-z, 0-9, underscores and periods (e.g. {sample_str}). "
+                    "Discord sets the rate; exhaustive scans can take a long time. Cooldowns and progress are saved automatically."
+                )
+            else:
+                preview = preview_candidates("generated", lengths, [], prefs, sample_size=6)
+                if generation != self._preview_generation:
+                    return
+                sample_str = ", ".join(preview.sample_candidates) if preview.sample_candidates else "none"
+                self.estimate_label.setText(
+                    f"{preview.total_candidates:,} matching candidates ({preview.strategy_summary}) · "
+                    f"Preview: {sample_str}. Cooldowns and progress are saved automatically."
+                )
+
+    def set_token(self, token: str) -> None:
+        self.clear()
+        self.token = token
+        if token:
+            self.provider_input.addItem("Signed-in account", "account")
+        self.set_busy(False)
+
+    def change_source(self) -> None:
+        self._session += 1
+        if self.results_worker is not None and self.results_worker.isRunning():
+            self._retire_worker(self.results_worker)
+        self.results_worker = None
+        self.account_id = ""
+        self.scan = None
+        self._last_health = None
+        self._last_diagnostics = None
+        self._next_expiry_epoch = None
+        self.history_input.clear()
+        self.table.setRowCount(0)
