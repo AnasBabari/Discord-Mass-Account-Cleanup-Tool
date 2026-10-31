@@ -523,3 +523,13 @@ class UsernameScan:
     @property
     def deduplicated_hits(self) -> int:
         return self.dedup_hits
+
+
+@dataclass(frozen=True)
+class UsernameProgress:
+    scan: UsernameScan
+    candidate: str = ""
+    result: UsernameCheckResult | None = None
+    message: str = ""
+    health: ProviderHealth | None = None
+    diagnostics: DiagnosticsSummary | None = None
