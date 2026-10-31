@@ -703,3 +703,63 @@ class UsernameScanStore:
             expires_epoch=exp_epoch,
             _clock=bound_clock,
         )
+
+    def record_diagnostic(
+        self,
+        *,
+        provider: str,
+        scope: str,
+        route: str,
+        username: str,
+        classification: str,
+        origin: str,
+        scan_id: str = "",
+        started_at: str | float = "",
+        completed_at: str | float = "",
+        http_status: int = 0,
+        latency_ms: float = 0.0,
+        ratelimit_limit: int | None = None,
+        ratelimit_remaining: float | None = None,
+        ratelimit_reset_after: float | None = None,
+        ratelimit_bucket: str = "",
+        ratelimit_scope: str = "",
+        ratelimit_global: bool = False,
+        retry_at: float = 0.0,
+        retry_reason: str = "",
+        wait_seconds: float = 0.0,
+        consecutive_failures: int = 0,
+        consecutive_rate_limits: int = 0,
+    ) -> None:
+        now_str = format_utc_timestamp(float(self.clock()))
+        start_raw = (
+            format_utc_timestamp(float(started_at))
+            if isinstance(started_at, (int, float)) and not isinstance(started_at, bool)
+            else str(started_at or now_str)
+        )
+        end_raw = (
+            format_utc_timestamp(float(completed_at))
+            if isinstance(completed_at, (int, float)) and not isinstance(completed_at, bool)
+            else str(completed_at or now_str)
+        )
+        start_ts = sanitize_token(start_raw)
+        end_ts = sanitize_token(end_raw)
+        safe_username = sanitize_token(username)[:64]
+        safe_route = sanitize_token(route)[:120]
+        safe_bucket = sanitize_token(ratelimit_bucket)[:64]
+        safe_rl_scope = sanitize_token(ratelimit_scope)[:32]
+        safe_reason = sanitize_token(retry_reason)[:120]
+        safe_wait = max(0.0, float(wait_seconds)) if math.isfinite(wait_seconds) else 0.0
+        safe_latency = max(0.0, float(latency_ms)) if math.isfinite(latency_ms) else 0.0
+        safe_retry_at = (
+            float(retry_at)
+            if (not isinstance(retry_at, bool) and math.isfinite(retry_at) and retry_at >= 0)
+            else 0.0
+        )
+
+        is_definitive_net = int(
+            origin == "network" and classification in ("available", "unavailable", "invalid", "syntax_rejected")
+        )
+        is_cached = int(origin in ("cache", "stale_cache"))
+        is_dedup = int(origin == "dedup" or classification == "deduplicated")
+        is_local_invalid = int(origin == "local" and classification == "invalid")
+        is_net_req = int(origin == "network")
