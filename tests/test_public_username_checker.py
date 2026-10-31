@@ -285,3 +285,53 @@ def test_redirected_json_is_not_username_evidence(public_client):
     client.transport.request.return_value = response
     with pytest.raises(InvalidPayloadError, match="redirected"):
         client.check_username_availability("abc")
+
+
+def test_request_slot_excludes_another_process_and_recovers(public_client):
+    client, _ = public_client
+    lock_path = str(client.store.path) + ".public-request.lock"
+    helper = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from filelock import FileLock; lock=FileLock(sys.argv[1]); lock.acquire(); print('locked',flush=True); sys.stdin.read()",
+            lock_path,
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    original_wait = client.wait
+    event = threading.Event()
+    try:
+        assert helper.stdout.readline().strip() == "locked"
+
+        def cancel(event, seconds):
+            event.set()
+            return True
+
+        client.wait = cancel
+        with pytest.raises(RequestCancelledError):
+            client.check_username_availability("abc", cancel_event=event)
+        client.transport.request.assert_not_called()
+    finally:
+        if helper.poll() is None:
+            helper.terminate()
+        helper.communicate(timeout=5)
+    client.wait = original_wait
+    event.clear()
+    client.transport.request.return_value = MockResponse(json_data={"taken": True})
+    assert client.check_username_availability("abc", cancel_event=event).status == UsernameStatus.UNAVAILABLE
+
+
+def test_public_exports_identify_source(public_client, tmp_path):
+    client, _ = public_client
+    client.transport.request.return_value = MockResponse(json_data={"taken": False})
+    scan = client.store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    assert UsernameScanner(client.store, client).run(scan.id, PUBLIC_USERNAME_SCOPE).available == 1
+    output = tmp_path / "public.csv"
+    client.store.export_csv(scan.id, PUBLIC_USERNAME_SCOPE, output)
+    text = output.read_text()
+    assert "source" in text
+    assert "Discord public check" in text
