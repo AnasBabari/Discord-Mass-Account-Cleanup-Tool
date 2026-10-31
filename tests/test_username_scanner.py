@@ -118,3 +118,63 @@ def test_cancel_before_and_after_completed_response(scanner, scan_store):
     assert scanner.run(scan.id, "account-one", event).checked == 0
     scanner.client.check_username_availability.assert_not_called()
     event.clear()
+
+    def stop_after_response(name, **_):
+        event.set()
+        return UsernameCheckResult(name, UsernameStatus.AVAILABLE, utc_now())
+
+    scanner.client.check_username_availability.side_effect = stop_after_response
+    paused = scanner.run(scan.id, "account-one", event)
+    assert (paused.checked, paused.cursor, paused.status) == (1, 1, "paused")
+
+
+def test_keyboard_interrupt_checkpoints(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", lengths=(3,))
+    scanner.client.check_username_availability.side_effect = KeyboardInterrupt
+    paused = scanner.run(scan.id, "account-one")
+    assert paused.status == "paused"
+    assert paused.cursor == 0
+
+
+def test_process_lock_and_crash_recovery(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", lengths=(3,))
+    scan_store.set_status(scan.id, "account-one", "running")
+    with scan_store.lock(scan.id):
+        with pytest.raises(ScanBusyError):
+            scanner.run(scan.id, "account-one", max_checks=1)
+        scan_store.recover_interrupted("account-one")
+        assert scan_store.get_scan(scan.id, "account-one").status == "running"
+    scan_store.recover_interrupted("account-one")
+    assert scan_store.get_scan(scan.id, "account-one").status == "paused"
+    assert scanner.run(scan.id, "account-one", max_checks=1).checked == 1
+
+
+def test_result_and_cursor_rollback_together(scan_store):
+    scan = scan_store.create_scan("account-one", lengths=(3,))
+    with sqlite3.connect(scan_store.path) as connection:
+        connection.execute(
+            "CREATE TRIGGER fail_checkpoint BEFORE UPDATE OF cursor ON scans BEGIN SELECT RAISE(ABORT,'simulated crash'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        scan_store.save_result(
+            scan.id, "account-one", UsernameCheckResult("aaa", UsernameStatus.AVAILABLE, utc_now()), 1
+        )
+    assert scan_store.get_scan(scan.id, "account-one").cursor == 0
+    assert scan_store.results(scan.id, "account-one", False)[1] == 0
+
+
+def test_lock_released_after_process_exit(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", lengths=(3,))
+    lock_path = str(scan_store.path) + f".{scan.id}.lock"
+    helper = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from filelock import FileLock; lock=FileLock(sys.argv[1]); lock.acquire(); print('locked', flush=True); sys.stdin.read()",
+            lock_path,
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
