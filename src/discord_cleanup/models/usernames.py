@@ -345,3 +345,63 @@ class DiagnosticsSummary:
     @property
     def total_local_invalid(self) -> int:
         return self.requests_avoided_local_validation
+
+    @property
+    def effective_checks_per_minute(self) -> float | None:
+        return self.effective_definitive_checks_per_minute
+
+    @property
+    def eta_label(self) -> str:
+        return self.format_eta()
+
+    @property
+    def total_requests_avoided(self) -> int:
+        return (
+            self.cached_observations_reused
+            + self.requests_avoided_deduplication
+            + self.requests_avoided_local_validation
+        )
+
+    def format_eta(self) -> str:
+        if self.estimated_remaining_seconds is None:
+            return "insufficient data"
+        seconds = max(0, int(round(self.estimated_remaining_seconds)))
+        if seconds < 60:
+            return f"~{seconds}s"
+        minutes, sec = divmod(seconds, 60)
+        if minutes < 60:
+            return f"~{minutes}m {sec:02d}s"
+        hours, mins = divmod(minutes, 60)
+        if hours < 48:
+            return f"~{hours}h {mins:02d}m"
+        days = hours / 24.0
+        return f"~{days:,.1f} days"
+
+
+class _CallableString(str):
+    """String subclass that can also be called with 0 arguments for property/method compatibility."""
+
+    def __call__(self) -> str:
+        return str(self)
+
+
+@dataclass(frozen=True)
+class UsernameCheckResult:
+    username: str
+    status: UsernameStatus
+    checked_at: str
+    message: str = ""
+    origin: str = "network"  # "network", "cache", "stale_cache", "local"
+    provider: str = ""
+    expires_at: str = ""
+    reused_at: str = ""
+    observed_epoch: float | None = field(default=None, repr=False, compare=False)
+    expires_epoch: float | None = field(default=None, repr=False, compare=False)
+    _clock: Callable[[], float] | None = field(default=None, repr=False, compare=False)
+
+    def with_clock(self, clock: Callable[[], float] | None) -> UsernameCheckResult:
+        return replace(self, _clock=clock)
+
+    def _resolve_now(self, now: float | None = None) -> float:
+        if now is not None:
+            return float(now)
