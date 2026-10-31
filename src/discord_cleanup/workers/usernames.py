@@ -123,7 +123,21 @@ class UsernameScanWorker(CancellableTokenWorker):
                 now=effective_clock(),
             )
             self.progress_signal.emit(UsernameProgress(scan, health=health, diagnostics=diag))
+            result = scanner.run(
+                scan.id,
+                account_id,
+                self._cancel_event,
+                self.progress_signal.emit,
+                budget=self.budget,
+                use_cache=use_cache,
+                force_recheck=force_recheck,
+            )
+            self.completed_signal.emit(result)
         except Exception as exc:
-            pass
+            if not self.is_cancelled():
+                message = sanitize_token(str(exc))
+                if self.token:
+                    message = message.replace(self.token, "[REDACTED_TOKEN]")
+                self.error_signal.emit(message)
         finally:
             pass
