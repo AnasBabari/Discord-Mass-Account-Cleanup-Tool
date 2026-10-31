@@ -449,3 +449,41 @@ class UsernameScanner:
             consumer_cancel = threading.Event()
             if cancel_event.is_set():
                 consumer_cancel.set()
+            slot = _WaiterSlot(
+                scan_id=scan_id,
+                cancel_event=consumer_cancel,
+                outer_cancel_event=cancel_event,
+                request_started_epoch=request_started_epoch,
+                force_recheck=force_recheck,
+                max_wait_deadline_mono=max_wait_deadline_mono,
+                is_deadline_expired_fn=lambda: self._is_deadline_expired(max_wait_deadline_mono),
+                can_dispatch_fn=can_dispatch_network,
+                try_reserve_fn=try_reserve_network,
+                release_reserved_fn=release_reserved_network,
+                commit_reserved_fn=commit_reserved_network,
+                on_backoff=on_backoff,
+                before_commit_hook=before_commit_hook,
+            )
+
+            with _INFLIGHT_MUTEX:
+                existing = _INFLIGHT_MAP.get(inflight_key)
+                if existing is not None and not existing.done.is_set() and existing.add_waiter(slot):
+                    is_leader = False
+                    entry = existing
+                else:
+                    entry = _InFlightEntry(slot, request_started_epoch, use_cache=use_cache and not force_recheck)
+                    _INFLIGHT_MAP[inflight_key] = entry
+                    is_leader = True
+
+            if is_leader:
+
+                def _execute_leader_check(shared_entry: _InFlightEntry = entry) -> tuple[UsernameCheckResult, bool]:
+                    file_lock = self.store.candidate_inflight_lock(account_id, normalized)
+                    waited_for_process_lock = False
+                    while True:
+                        shared_entry.sync_cancel()
+                        if shared_entry.shared_cancel.is_set():
+                            raise RequestCancelledError("Username check cancelled.")
+                        eff_deadline = shared_entry.effective_deadline_mono()
+                        if eff_deadline is not None and self._is_deadline_expired(eff_deadline):
+                            raise RequestCancelledError("Active duration budget reached.")
