@@ -1145,3 +1145,54 @@ def test_complete_desktop_public_workflow_and_ui_states(qtbot: Any, monkeypatch:
     page.mode_input.setCurrentIndex(1)  # Custom list
     page.custom_input.setPlainText("cat, dog")
     page.budget_requests_input.setValue(1)
+    assert "2 unique entries" in page.estimate_label.text()
+
+    page.start_btn.click()
+    qtbot.waitUntil(lambda: page.worker is not None and not page.worker.isRunning(), timeout=3000)
+    assert page.scan is not None
+    assert page.scan.status == "paused"
+    assert page.scan.checked == 1
+    assert "Resume Selected" in page.status_label.text()
+    assert page.resume_btn.isEnabled() is True
+
+    # Resume with unlimited budget to complete "dog"
+    page.budget_requests_input.setValue(0)
+    page.resume_btn.click()
+    qtbot.waitUntil(lambda: page.worker is not None and not page.worker.isRunning(), timeout=3000)
+    assert page.scan.status == "completed"
+    assert page.scan.checked == 2
+    assert page.resume_btn.isEnabled() is False
+
+
+def test_performance_and_memory_benchmarks_with_representative_workloads(tmp_path: Path) -> None:
+    """Measure DB open latency, DP candidate count/preview, 2500-row pagination, idle tick cost,
+    generated-scan memory footprint, and overlapping vs. disjoint workload request savings.
+    """
+    clock = FakeClock(50_000.0)
+    db_path = tmp_path / "perf.db"
+    store = UsernameScanStore(db_path, clock=clock)
+
+    # 1. Reopen already-migrated v3 database latency (< 50ms)
+    t0 = time.perf_counter()
+    reopened = UsernameScanStore(db_path, clock=clock)
+    db_open_ms = (time.perf_counter() - t0) * 1000.0
+    assert db_open_ms < 50.0
+    del reopened
+
+    # 2. Candidate count & preview latency across patterns (< 50ms)
+    t0 = time.perf_counter()
+    prefs = CandidatePreferences(strategy="randomized", charset_mode="letters", pattern="pronounceable", seed=77)
+    cnt = candidate_count((3, 4), prefs)
+    prev = preview_candidates("generated", (3, 4), [], prefs, sample_size=8)
+    preview_ms = (time.perf_counter() - t0) * 1000.0
+    assert cnt == prev.total_candidates and cnt > 0
+    assert preview_ms < 50.0
+
+    # 3. Table pagination query with 2,500 saved rows (< 100ms)
+    alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+    big_names = [
+        f"u{alphabet[(i // (36 * 36)) % 36]}{alphabet[(i // 36) % 36]}{alphabet[i % 36]}" for i in range(2500)
+    ]
+    big_scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=big_names)
+    now_iso = format_utc_timestamp(clock.now)
+    exp_iso = format_utc_timestamp(clock.now + 900.0)
