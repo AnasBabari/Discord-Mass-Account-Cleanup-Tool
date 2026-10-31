@@ -58,3 +58,63 @@ def test_incremental_generator_matches_exhaustive_reference(monkeypatch):
         for chars in itertools.product("ab.", repeat=length)
         if ".." not in "".join(chars)
     ]
+    actual, cursor = [], 0
+    while item := next_generated_candidate((3, 4), cursor):
+        name, cursor = item
+        actual.append(name)
+    assert actual == expected
+    assert len(actual) == candidate_count((3, 4))
+    assert len(set(actual)) == len(actual)
+
+
+def test_custom_normalization_and_secret_redaction():
+    assert parse_custom_names(" ABC, @abc\nxyz\tA_B\n") == ["abc", "xyz", "a_b"]
+    token = "M" * 24 + "." + "G" * 6 + "." + "a" * 27
+    assert token.lower() not in str(parse_custom_names(token))
+    assert "redacted" in str(parse_custom_names(token))
+
+
+def test_resume_only_checks_remaining_candidates(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", lengths=(3,))
+    first = scanner.run(scan.id, "account-one", max_checks=2)
+    assert (first.checked, first.available, first.cursor, first.status) == (2, 2, 2, "paused")
+    reopened = UsernameScanStore(scan_store.path)
+    second = UsernameScanner(reopened, scanner.client).run(scan.id, "account-one", max_checks=1)
+    assert second.checked == 3
+    assert [call.args[0] for call in scanner.client.check_username_availability.call_args_list] == ["aaa", "aab", "aac"]
+    assert reopened.results(scan.id, "account-one")[1] == 3
+
+
+def test_failed_candidate_retried_and_error_row_replaced(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", mode="custom", names=["abc", "xyz"])
+    scanner.client.check_username_availability.side_effect = NetworkError("secret-token disconnected")
+    failed = scanner.run(scan.id, "account-one")
+    assert (failed.status, failed.cursor, failed.checked) == ("failed", 0, 0)
+    assert "secret-token" not in failed.error
+    assert scan_store.results(scan.id, "account-one")[1] == 0
+    assert scan_store.results(scan.id, "account-one", False)[0][0].status == UsernameStatus.ERROR
+    scanner.client.check_username_availability.side_effect = lambda name, **_: UsernameCheckResult(
+        name, UsernameStatus.AVAILABLE, utc_now()
+    )
+    completed = scanner.run(scan.id, "account-one")
+    assert (completed.status, completed.checked, completed.available) == ("completed", 2, 2)
+    assert scan_store.results(scan.id, "account-one", False)[1] == 2
+
+
+def test_invalid_custom_names_never_reach_network(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", mode="custom", names=["a..", "toolong", "abc"])
+    result = scanner.run(scan.id, "account-one")
+    assert (result.checked, result.available, result.status) == (3, 1, "completed")
+    assert scanner.client.check_username_availability.call_count == 1
+    assert [result.status for result in scan_store.results(scan.id, "account-one", False)[0]].count(
+        UsernameStatus.INVALID
+    ) == 2
+
+
+def test_cancel_before_and_after_completed_response(scanner, scan_store):
+    scan = scan_store.create_scan("account-one", mode="custom", names=["abc", "xyz"])
+    event = threading.Event()
+    event.set()
+    assert scanner.run(scan.id, "account-one", event).checked == 0
+    scanner.client.check_username_availability.assert_not_called()
+    event.clear()
