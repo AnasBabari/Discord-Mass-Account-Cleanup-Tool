@@ -178,3 +178,63 @@ def test_window_close_defers_for_active_scanner(qtbot, monkeypatch, tmp_path, fa
     page = window.usernames_page
     page.store_path = tmp_path / "scans.db"
     page.set_token("secret-token")
+    page.mode_input.setCurrentIndex(1)
+    page.custom_input.setPlainText("abc xyz")
+    page.start_scan()
+    worker = page.worker
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=3000)
+        event = QCloseEvent()
+        window.closeEvent(event)
+        assert not event.isAccepted()
+        release.set()
+        qtbot.waitUntil(lambda: not worker.isRunning(), timeout=3000)
+        qtbot.waitUntil(lambda: not window.active_workers, timeout=3000)
+        window.navigate_to_page(5)
+        assert window.main_stack.currentWidget() is window.logs_page
+    finally:
+        release.set()
+        worker.wait(4000)
+
+
+def test_cli_custom_list_results_and_export(monkeypatch, tmp_path, fake_client, capsys):
+    output = tmp_path / "export.csv"
+    answers = iter(["2", "ABC, xyz a..", "", "4", "1", "5", "1", str(output), "q"])
+    monkeypatch.setattr("builtins.input", lambda *args: next(answers))
+    monkeypatch.setattr(cli, "DiscordApiClient", lambda *args, **kwargs: fake_client)
+    transport = MagicMock()
+    monkeypatch.setattr(cli, "RequestsTransport", lambda: transport)
+    cli.run_username_checker(DiscordApiClient("secret-token"), tmp_path / "scans.db")
+    text = capsys.readouterr().out
+    assert "AVAILABLE: abc" in text
+    assert "2 available" in text
+    assert "abc |" in text
+    assert "secret-token" not in text
+    assert "invalid" in output.read_text()
+    fake_client.clear_token.assert_called_once()
+    transport.close.assert_called_once()
+
+
+def test_cli_interrupt_and_resume(monkeypatch, tmp_path, fake_client, capsys):
+    store = UsernameScanStore(tmp_path / "scans.db")
+    scan = store.create_scan("account-one", mode="custom", names=["abc"])
+    fake_client.check_username_availability.side_effect = KeyboardInterrupt
+    answers = iter(["3", "1", "q"])
+    monkeypatch.setattr("builtins.input", lambda *args: next(answers))
+    monkeypatch.setattr(cli, "DiscordApiClient", lambda *args, **kwargs: fake_client)
+    monkeypatch.setattr(cli, "RequestsTransport", MagicMock)
+    cli.run_username_checker(DiscordApiClient("secret-token"), store.path)
+    assert "Scan paused" in capsys.readouterr().out
+    assert store.get_scan(scan.id, "account-one").cursor == 0
+
+
+def test_public_worker_never_verifies_or_sends_a_token(qtbot, tmp_path, fake_client):
+    worker = UsernameScanWorker(
+        "",
+        mode="custom",
+        custom_text="abc",
+        store_path=tmp_path / "public.db",
+        client=fake_client,
+        access="public",
+    )
+    completed = []
