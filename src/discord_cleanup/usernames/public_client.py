@@ -163,3 +163,63 @@ class PublicUsernameClient:
 
     token = ""
     scope = PUBLIC_USERNAME_SCOPE
+
+    def __init__(
+        self,
+        store: UsernameScanStore,
+        transport: Transport | None = None,
+        base_url: str = BASE_URL,
+        min_interval: float = 1.0,
+        clock: Callable[[], float] = time.time,
+        wait: Callable[[threading.Event, float], bool] | None = None,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        safety_margin: float = 0.25,
+        jitter: float | Callable[[], float] = 0.0,
+        rng: Callable[[], float] | None = None,
+        freshness_policy: CacheFreshnessPolicy | None = None,
+        max_network_retries: int = 3,
+    ):
+        if isinstance(min_interval, bool) or not math.isfinite(min_interval) or min_interval < 0:
+            raise ValueError("Invalid request interval.")
+        self.store = store
+        self.transport = transport if transport is not None else RequestsTransport(allow_redirects=False)
+        self.url = base_url.rstrip("/") + PUBLIC_USERNAME_ENDPOINT
+        self.min_interval = min_interval
+        self.clock = clock
+        self.monotonic = monotonic
+        self._uses_custom_clock = clock is not time.time
+        self.wait = wait if wait is not None else lambda event, seconds: event.wait(seconds)
+        self.safety_margin = max(0.0, float(safety_margin)) if math.isfinite(safety_margin) else 0.25
+        self.jitter = jitter
+        self.rng = rng
+        self.freshness_policy = freshness_policy or CacheFreshnessPolicy()
+        self.max_network_retries = max(1, int(max_network_retries))
+        self._mono_deadlines: dict[str, tuple[float, float]] = {}
+        self._consecutive_failures = 0
+        self._consecutive_rate_limits = 0
+
+    def _compute_jitter(self) -> float:
+        if callable(self.jitter):
+            raw = self.jitter()
+        elif self.rng is not None and isinstance(self.jitter, (int, float)) and not isinstance(self.jitter, bool):
+            raw = float(self.jitter) * float(self.rng())
+        else:
+            raw = self.jitter
+        if isinstance(raw, bool):
+            return 0.0
+        try:
+            val = float(raw)
+        except (ValueError, TypeError, OverflowError):
+            return 0.0
+        # Jitter must strictly be >= 0 so it can never cause an early retry.
+        return val if (math.isfinite(val) and val > 0) else 0.0
+
+    def with_random_jitter(self, max_jitter_seconds: float = 0.35) -> PublicUsernameClient:
+        bound = max(0.0, float(max_jitter_seconds))
+        self.jitter = (lambda: random.uniform(0.0, bound)) if bound > 0 else 0.0
+        return self
+
+    def clear_token(self) -> None:
+        # Kept compatible with the existing worker lifecycle; public checks never receive a token.
+        self.token = ""
