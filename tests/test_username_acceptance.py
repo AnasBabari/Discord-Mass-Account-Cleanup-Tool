@@ -863,3 +863,50 @@ def test_multiprocess_scan_busy_and_cross_process_candidate_dedup(tmp_path: Path
         assert len(server.requests) == 1
     finally:
         server.close()
+
+
+def test_multiprocess_circuit_breaker_blocks_second_process_and_cooldown_extension(tmp_path: Path) -> None:
+    """1) Circuit opened by Process 1 blocks Process 2 before any HTTP request is dispatched.
+    2) Cooldown extended by Process 2 while Process 1 is waiting is honored by Process 1.
+    """
+    server = _MockDiscordServer()
+    server.mode = "captcha"
+    db_path = tmp_path / "multiproc_circuit.db"
+    store = UsernameScanStore(db_path)
+    scan1 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan2 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["def"])
+
+    worker_code = textwrap.dedent(
+        """
+        import json, pathlib, sys, time
+        from discord_cleanup.models.usernames import PUBLIC_USERNAME_SCOPE
+        from discord_cleanup.transport.http_transport import RequestsTransport
+        from discord_cleanup.usernames.public_client import PublicUsernameClient
+        from discord_cleanup.usernames.scanner import UsernameScanner
+        from discord_cleanup.usernames.store import UsernameScanStore
+
+        db_path, base_url, scan_id = sys.argv[1], sys.argv[2], sys.argv[3]
+        waiting_file = sys.argv[4] if len(sys.argv) > 4 else ""
+        store = UsernameScanStore(db_path)
+        transport = RequestsTransport()
+        try:
+            client = PublicUsernameClient(store, transport=transport, base_url=base_url, min_interval=0.0, safety_margin=0.0, jitter=0.0)
+            scanner = UsernameScanner(store, client)
+            if waiting_file:
+                store.save_cooldown(client.url, time.time() + 0.35, "Rate limited")
+            t0 = time.monotonic()
+            def on_prog(p):
+                if waiting_file and "Rate limited" in p.message and not pathlib.Path(waiting_file).exists():
+                    pathlib.Path(waiting_file).write_text(str(time.time()), encoding="utf-8")
+            res = scanner.run(scan_id, PUBLIC_USERNAME_SCOPE, on_progress=on_prog)
+            print(json.dumps({
+                "status": res.status,
+                "checked": res.checked,
+                "cursor": res.cursor,
+                "error": res.error,
+                "elapsed": time.monotonic() - t0,
+            }))
+        finally:
+            transport.close()
+        """
+    )
