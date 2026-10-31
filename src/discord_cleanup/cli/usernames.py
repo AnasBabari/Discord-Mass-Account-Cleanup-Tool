@@ -175,3 +175,24 @@ def build_username_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Reset circuit-breaker pause state while preserving active server cooldowns.",
     )
+    parser.add_argument(
+        "--store-path",
+        dest="store_path",
+        default="",
+        help="Optional custom SQLite database path.",
+    )
+    return parser
+
+
+def run_username_cli_args(
+    argv: Sequence[str],
+    *,
+    store_path: str | Path | None = None,
+    client: DiscordApiClient | PublicUsernameClient | None = None,
+) -> int:
+    """Execute non-interactive username CLI workflow when flags are supplied beyond `--usernames`."""
+    parser = build_username_arg_parser()
+    args = parser.parse_args(list(argv))
+    resolved_store_path = args.store_path or store_path
+    transport = RequestsTransport()
+    owned_client: DiscordApiClient | PublicUsernameClient | None = None
