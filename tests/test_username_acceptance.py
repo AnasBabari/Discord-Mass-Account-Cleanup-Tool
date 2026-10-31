@@ -1085,3 +1085,63 @@ def test_multiprocess_killed_holder_lock_recovery_and_interrupted_v1_v2_migratio
 
 def test_complete_desktop_public_workflow_and_ui_states(qtbot: Any, monkeypatch: Any, tmp_path: Path) -> None:
     """End-to-end desktop workflow from LoginPage entry point through preview, budget, pause, resume, and states."""
+    login = LoginPage()
+    qtbot.addWidget(login)
+    navigated: list[bool] = []
+    login.public_usernames_requested.connect(lambda: navigated.append(True))
+    login.public_usernames_btn.click()
+    assert navigated == [True]
+
+    clock = FakeClock(20_000.0)
+    store_path = tmp_path / "e2e_desktop.db"
+    store = UsernameScanStore(store_path, clock=clock)
+    transport = MagicMock()
+    transport.request.side_effect = [
+        MockResponse(json_data={"taken": False}),  # "cat" -> available
+        MockResponse(json_data={"taken": True}),   # "dog" -> unavailable
+    ]
+    client = PublicUsernameClient(store, transport=transport, min_interval=0.0, clock=clock, wait=clock.wait)
+    monkeypatch.setattr(
+        page_module,
+        "UsernameScanWorker",
+        lambda *args, **kwargs: UsernameScanWorker(*args, **kwargs, client=client),
+    )
+
+    page = UsernamesPage(store_path=store_path, clock=clock)
+    page.resize(1000, 680)
+    qtbot.addWidget(page)
+    page.show()
+
+    # Verify accessible names are populated across interactive controls
+    for widget in (
+        page.provider_input,
+        page.mode_input,
+        page.length_input,
+        page.strategy_input,
+        page.charset_input,
+        page.pattern_input,
+        page.seed_input,
+        page.budget_requests_input,
+        page.use_cache_checkbox,
+        page.start_btn,
+        page.pause_btn,
+        page.resume_btn,
+        page.recheck_btn,
+        page.watchlist_add_btn,
+        page.reset_health_btn,
+        page.diagnostics_btn,
+        page.history_input,
+        page.refresh_btn,
+        page.filter_input,
+        page.copy_btn,
+        page.export_btn,
+        page.table,
+        page.previous_btn,
+        page.next_btn,
+    ):
+        assert widget.accessibleName(), f"Missing accessibleName on {widget}"
+
+    # Configure custom scan with budget=1 so it pauses after "cat", then resume to finish "dog"
+    page.mode_input.setCurrentIndex(1)  # Custom list
+    page.custom_input.setPlainText("cat, dog")
+    page.budget_requests_input.setValue(1)
