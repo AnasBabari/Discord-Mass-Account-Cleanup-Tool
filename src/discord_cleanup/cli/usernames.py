@@ -197,7 +197,60 @@ def run_username_cli_args(
     transport = RequestsTransport()
     owned_client: DiscordApiClient | PublicUsernameClient | None = None
     try:
-        pass
+        store = UsernameScanStore(resolved_store_path)
+        active_client = client
+        if active_client is None:
+            owned_client = PublicUsernameClient(store, transport=transport)
+            active_client = owned_client
+        scanner = UsernameScanner(store, active_client)
+        account_id = scanner.identify()
+        store.recover_interrupted(account_id)
+        route = PUBLIC_CHECK_URL if isinstance(active_client, PublicUsernameClient) else "/users/@me/pomelo-attempt"
+
+        if args.reset_health:
+            health = store.reset_provider_health(account_id, route=route)
+            print(f"Provider health state: {health.state.label}")
+            if not (args.names or args.input_file or args.lengths or args.diagnostics or args.preview):
+                return 0
+
+        if args.diagnostics:
+            _print_diagnostics(store, account_id, route)
+            return 0
+
+        lengths: tuple[int, ...] = (int(args.lengths),) if args.lengths in ("3", "4") else (3, 4)
+        prefs = CandidatePreferences(
+            strategy=args.strategy if args.strategy != "watchlist" else "exhaustive",
+            charset_mode=args.charset,
+            pattern=args.pattern,
+            seed=args.seed,
+        )
+
+        custom_raw = args.names
+        if args.input_file:
+            file_text = Path(args.input_file).read_text(encoding="utf-8")
+            custom_raw = f"{custom_raw}\n{file_text}" if custom_raw else file_text
+        names = parse_custom_names(custom_raw)
+
+        mode = "custom" if (names or args.strategy == "watchlist") else "generated"
+        if args.strategy == "watchlist" and not names:
+            names = store.watchlist_candidates(
+                account_id,
+                provider="public" if isinstance(active_client, PublicUsernameClient) else "account",
+                stale_only=not args.force_recheck,
+            ) or [str(item["username"]) for item in store.list_watchlist(account_id)]
+
+        if args.preview:
+            prev = preview_candidates(mode, lengths, names, prefs, sample_size=15)
+            print(
+                f"Candidate preview ({prev.strategy_summary}): {prev.total_candidates:,} total "
+                f"(sample: {', '.join(prev.sample_candidates)})"
+            )
+            return 0
+
+        if mode == "custom" and not names:
+            print("No candidate usernames provided.")
+            return 1
+
     except KeyboardInterrupt:
         pass
     finally:
