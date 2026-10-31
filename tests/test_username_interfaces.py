@@ -238,3 +238,49 @@ def test_public_worker_never_verifies_or_sends_a_token(qtbot, tmp_path, fake_cli
         access="public",
     )
     completed = []
+    worker.completed_signal.connect(completed.append)
+    with qtbot.waitSignal(worker.finished, timeout=3000):
+        worker.start()
+    assert completed[0].account_id == PUBLIC_USERNAME_SCOPE
+    assert completed[0].checked == 1
+    fake_client.verify_token.assert_not_called()
+    assert worker.token == ""
+
+
+def test_public_mode_available_from_login_page(qtbot, monkeypatch):
+    monkeypatch.setattr(app_module.MainWindow, "check_saved_token", lambda self: None)
+    monkeypatch.setattr(app_module.MainWindow, "setup_interceptors", lambda self: None)
+    delete_token = MagicMock()
+    monkeypatch.setattr(app_module.DEFAULT_CREDENTIAL_STORE, "delete_token", delete_token)
+    window = app_module.MainWindow()
+    qtbot.addWidget(window)
+    window.login_page.public_usernames_btn.click()
+    assert window.public_username_mode
+    assert window.current_token == ""
+    assert window.main_stack.currentWidget() is window.usernames_page
+    assert window.usernames_page.start_btn.isEnabled()
+    assert not window.btn_servers.isEnabled()
+    window.navigate_to_page(0)
+    assert window.main_stack.currentWidget() is window.usernames_page
+    window.logout()
+    assert window.main_stack.currentWidget() is window.login_page
+    delete_token.assert_not_called()
+
+
+def test_public_queue_pause_and_reload_keeps_cooldown(qtbot, monkeypatch, tmp_path):
+    store = UsernameScanStore(tmp_path / "public.db")
+    transport = MagicMock()
+    client = PublicUsernameClient(store, transport=transport)
+    deadline = time.time() + 2009
+    store.save_cooldown(client.url, deadline, "Rate limited")
+    monkeypatch.setattr(
+        page_module,
+        "UsernameScanWorker",
+        lambda *args, **kwargs: UsernameScanWorker(*args, **kwargs, client=client),
+    )
+    page = UsernamesPage(store_path=store.path)
+    qtbot.addWidget(page)
+    page.mode_input.setCurrentIndex(1)
+    page.custom_input.setPlainText("abc")
+    page.start_scan()
+    worker = page.worker
