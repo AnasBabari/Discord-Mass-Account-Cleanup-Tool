@@ -304,4 +304,17 @@ def run_username_cli_args(
         print("\nInterrupted; completed checks and cursor are saved.")
         return 130
     finally:
-        pass
+        if owned_client is not None:
+            owned_client.clear_token()
+        transport.close()
+
+
+def run_username_checker(
+    client: DiscordApiClient | None = None,
+    store_path: str | Path | None = None,
+    *,
+    public: bool = False,
+) -> None:
+    """Interactive username workflow. Ctrl+C checkpoints an active scan and returns to this menu."""
+    transport = RequestsTransport()
+    owned_client: DiscordApiClient | PublicUsernameClient | None = None
