@@ -918,3 +918,63 @@ def test_migration_runs_once_preserves_expires_at_and_handles_malformed_timestam
             );
             """
         )
+
+    store = UsernameScanStore(db_file)
+    # 1. Newer observation ("unavailable" at 09:00) won over older ("available" at 08:00)
+    obs_abc = store.get_cached_observation("abc", scope=PUBLIC_USERNAME_SCOPE, now=1793437210.0)
+    assert obs_abc is not None
+    assert obs_abc.status == UsernameStatus.UNAVAILABLE
+    assert obs_abc.checked_at == "2026-10-31T09:00:00+00:00"
+
+    # 2. Established expires_at on "def" (08:05:00) was preserved, not recalculated to 08:15:00
+    obs_def_before = store.get_cached_observation("def", scope=PUBLIC_USERNAME_SCOPE, now=1793433800.0)  # 08:03:20
+    assert obs_def_before is not None
+    assert obs_def_before.expires_at == "2026-10-31T08:05:00+00:00"
+    obs_def_after = store.get_cached_observation("def", scope=PUBLIC_USERNAME_SCOPE, now=1793434200.0)  # 08:10:00
+    assert obs_def_after is None
+
+    # 3. Malformed timestamp is treated conservatively as expired/historical, never freshly verified
+    assert store.get_cached_observation("badts", scope=PUBLIC_USERNAME_SCOPE, now=1.0) is None
+    rows_old, _ = store.results("s-old", PUBLIC_USERNAME_SCOPE, available_only=False, now=1793433601.0)
+    by_user = {r.username: r for r in rows_old}
+    assert by_user["badts"].is_stale is True
+    assert by_user["badts"].display_status == "available (historical)"
+
+    # 4. origin='cache' row was not backfilled as a primary network observation
+    assert store.get_cached_observation("cachedrow", scope=PUBLIC_USERNAME_SCOPE, now=1793433601.0) is None
+
+    # 5. Subsequent opens do not re-run migration backfill
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("DELETE FROM observation_cache")
+    reopened = UsernameScanStore(db_file)
+    assert reopened.get_cached_observation("abc", scope=PUBLIC_USERNAME_SCOPE, now=1793437210.0) is None
+
+
+def test_save_cached_observation_preserves_result_timestamp_and_rejects_older_write(tmp_path):
+    store = UsernameScanStore(tmp_path / "order.db")
+    newer = UsernameCheckResult("abc", UsernameStatus.UNAVAILABLE, format_utc_timestamp(2000.0))
+    older = UsernameCheckResult("abc", UsernameStatus.AVAILABLE, format_utc_timestamp(1000.0))
+
+    # Even if now=5000.0 is passed, result.checked_at (2000.0) is used for observed_epoch
+    store.save_cached_observation(newer, scope=PUBLIC_USERNAME_SCOPE, now=5000.0)
+    # Out-of-order older observation must not overwrite newer observation
+    store.save_cached_observation(older, scope=PUBLIC_USERNAME_SCOPE, now=6000.0)
+
+    cached = store.get_cached_observation("abc", scope=PUBLIC_USERNAME_SCOPE, now=2100.0)
+    assert cached is not None
+    assert cached.status == UsernameStatus.UNAVAILABLE
+    assert cached.checked_at == format_utc_timestamp(2000.0)
+
+
+def test_freshness_accuracy_across_results_filters_csv_and_watchlist(tmp_path):
+    clock = FakeClock(10000.0)
+    store = UsernameScanStore(tmp_path / "freshness.db", clock=clock)
+    policy = CacheFreshnessPolicy(available_ttl_seconds=300.0, unavailable_ttl_seconds=3600.0)
+    transport = MagicMock()
+    transport.request.side_effect = [
+        MockResponse(json_data={"taken": False}),  # "cat" available at t=10000 (expires 10300)
+        MockResponse(json_data={"taken": False}),  # "dog" available at t=10200 (expires 10500)
+    ]
+    client = PublicUsernameClient(
+        store, transport=transport, min_interval=0, clock=clock, wait=clock.wait, freshness_policy=policy
+    )
