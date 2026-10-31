@@ -232,3 +232,57 @@ def test_both_consumers_exhausted_budgets_before_dispatch_dispatches_zero_furthe
 
     scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
     scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+
+    # Each consumer has budget=1. Attempt 1 uses A's budget; Attempt 2 uses B's budget; Attempt 3 sees both exhausted!
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(
+            scanner_a.run,
+            scan_a.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_network_requests=1),
+        )
+        time.sleep(0.03)
+        fut_b = pool.submit(
+            scanner_b.run,
+            scan_b.id,
+            PUBLIC_USERNAME_SCOPE,
+            budget=RequestBudget(max_network_requests=1),
+        )
+        time.sleep(0.03)
+        both_joined.set()
+        res_a = fut_a.result(timeout=3.0)
+        res_b = fut_b.result(timeout=3.0)
+
+    assert attempt_count == 2
+    assert res_a.status == "paused"
+    assert res_b.status == "paused"
+    assert res_a.checked == 0
+    assert res_b.checked == 0
+    assert res_a.network_checks == 1
+    assert res_b.network_checks == 1
+    assert "network request budget reached (1/1)" in res_a.pause_reason.lower()
+    assert "network request budget reached (1/1)" in res_b.pause_reason.lower()
+
+
+# ===========================================================================
+# Section 3: Separate Shared Work From Original Leader's Deadline
+# ===========================================================================
+
+
+def test_leader_short_deadline_expires_during_cooldown_while_follower_completes(tmp_path: Path) -> None:
+    """Consumer A (leader, short duration budget) expires during cooldown; Consumer B (follower) completes."""
+    store = UsernameScanStore(tmp_path / "leader_expires_follower_lives.db")
+    store.save_cooldown(PUBLIC_CHECK_URL, time.time() + 0.24, "Rate limited")
+
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(status_code=200, json_data={"taken": False})
+
+    client_a = PublicUsernameClient(store, transport=transport, min_interval=0.0, safety_margin=0.0, jitter=0.0)
+    client_b = PublicUsernameClient(store, transport=transport, min_interval=0.0, safety_margin=0.0, jitter=0.0)
+    scanner_a = UsernameScanner(store, client_a)
+    scanner_b = UsernameScanner(store, client_b)
+
+    scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+
+    t0 = time.monotonic()
