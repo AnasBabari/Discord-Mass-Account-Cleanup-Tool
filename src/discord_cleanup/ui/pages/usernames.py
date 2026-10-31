@@ -166,3 +166,63 @@ class UsernamesPage(QWidget):
 
         self.pattern_input = QComboBox()
         self.pattern_input.setAccessibleName("Pattern preference")
+        for label, pat in (
+            ("Pattern: Any valid", "any"),
+            ("Pattern: Pronounceable (CVC/CV)", "pronounceable"),
+            ("Pattern: Starts with letter", "starts_with_letter"),
+            ("Pattern: No edge _ or .", "no_edge_punctuation"),
+            ("Pattern: Palindrome", "palindrome"),
+            ("Pattern: LLL / LLLL", "LLL,LLLL"),
+            ("Pattern: CVC", "CVC"),
+            ("Pattern: CVCC", "CVCC"),
+            ("Pattern: CVCV", "CVCV"),
+            ("Pattern: LL# / LL##", "LL#,LL##"),
+        ):
+            self.pattern_input.addItem(label, pat)
+        self.pattern_input.currentIndexChanged.connect(self.update_estimate)
+
+        self.seed_input = QSpinBox()
+        self.seed_input.setAccessibleName("Random seed")
+        self.seed_input.setRange(0, 999999)
+        self.seed_input.setValue(42)
+        self.seed_input.setPrefix("Seed: ")
+        self.seed_input.valueChanged.connect(self.update_estimate)
+
+        self.budget_requests_input = QSpinBox()
+        self.budget_requests_input.setAccessibleName("Network request budget")
+        self.budget_requests_input.setRange(0, 100000)
+        self.budget_requests_input.setValue(0)
+        self.budget_requests_input.setSpecialValueText("Max Net: Unlimited")
+        self.budget_requests_input.setPrefix("Max Net: ")
+
+        self.use_cache_checkbox = QCheckBox("Use Cache")
+        self.use_cache_checkbox.setAccessibleName("Use observation cache")
+        self.use_cache_checkbox.setChecked(True)
+        self.use_cache_checkbox.setToolTip("Reuse fresh cached observations without spending network requests.")
+
+        strategy_row.addWidget(self.strategy_input)
+        strategy_row.addWidget(self.charset_input)
+        strategy_row.addWidget(self.pattern_input)
+        strategy_row.addWidget(self.seed_input)
+        strategy_row.addWidget(self.budget_requests_input)
+        strategy_row.addWidget(self.use_cache_checkbox)
+        layout.addLayout(strategy_row)
+
+        self.custom_input = QPlainTextEdit()
+        self.custom_input.setAccessibleName("Custom usernames")
+        self.custom_input.setPlaceholderText("Paste names separated by spaces, commas, or new lines...")
+        self.custom_input.setMaximumHeight(58)
+        self.custom_input.hide()
+        self.custom_input.textChanged.connect(self.update_estimate)
+        layout.addWidget(self.custom_input)
+
+        self.estimate_label = QLabel()
+        self.estimate_label.setWordWrap(True)
+        layout.addWidget(self.estimate_label)
+
+        controls = QHBoxLayout()
+        self.start_btn = QPushButton("Start New Scan")
+        self.start_btn.setAccessibleName("Start new scan")
+        self.start_btn.setObjectName("ActionBtn")
+        self.start_btn.clicked.connect(self.start_scan)
+        self.pause_btn = QPushButton("Pause")
