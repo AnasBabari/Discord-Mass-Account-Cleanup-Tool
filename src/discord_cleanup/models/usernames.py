@@ -286,3 +286,62 @@ class RateLimitMetadata:
 class RequestDiagnosticEntry:
     id: int
     scan_id: str
+    provider: str
+    scope: str
+    route: str
+    username: str
+    started_at: str
+    completed_at: str
+    http_status: int
+    latency_ms: float
+    classification: str
+    origin: str
+    ratelimit_limit: int | None = None
+    ratelimit_remaining: float | None = None
+    ratelimit_reset_after: float | None = None
+    ratelimit_bucket: str = ""
+    ratelimit_scope: str = ""
+    ratelimit_global: bool = False
+    retry_at: float = 0.0
+    retry_reason: str = ""
+    wait_seconds: float = 0.0
+    consecutive_failures: int = 0
+    consecutive_rate_limits: int = 0
+
+    @property
+    def detail(self) -> str:
+        return self.retry_reason or self.classification
+
+
+@dataclass(frozen=True)
+class DiagnosticsSummary:
+    definitive_network_checks: int = 0
+    cached_observations_reused: int = 0
+    requests_avoided_deduplication: int = 0
+    requests_avoided_local_validation: int = 0
+    total_wait_seconds: float = 0.0
+    network_requests_total: int = 0
+    recent_success_count: int = 0
+    recent_rate_limit_count: int = 0
+    recent_failure_count: int = 0
+    consecutive_failures: int = 0
+    consecutive_rate_limits: int = 0
+    effective_definitive_checks_per_minute: float | None = None
+    estimated_remaining_seconds: float | None = None
+    provider_health: ProviderHealth = field(default_factory=lambda: ProviderHealth(provider=PUBLIC_USERNAME_SCOPE))
+
+    @property
+    def total_network_checks(self) -> int:
+        return self.definitive_network_checks
+
+    @property
+    def total_cache_hits(self) -> int:
+        return self.cached_observations_reused
+
+    @property
+    def total_deduplicated(self) -> int:
+        return self.requests_avoided_deduplication
+
+    @property
+    def total_local_invalid(self) -> int:
+        return self.requests_avoided_local_validation
