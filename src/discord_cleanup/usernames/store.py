@@ -939,3 +939,47 @@ class UsernameScanStore:
                 "FROM request_diagnostics WHERE scope=? ORDER BY id DESC LIMIT 50",
                 (scope,),
             ).fetchall()
+
+        health = self.get_provider_health(scope, route=route, now=current_now)
+        if counter is None:
+            return DiagnosticsSummary(
+                consecutive_failures=health.consecutive_failures,
+                consecutive_rate_limits=health.consecutive_rate_limits,
+                provider_health=health,
+            )
+
+        definitive_net = int(counter["definitive_network_checks"])
+        cached_reused = int(counter["cached_reused"])
+        dedup_avoided = int(counter["dedup_avoided"])
+        local_invalid = int(counter["local_invalid_avoided"])
+        wait_total = float(counter["wait_seconds_total"])
+        net_total = int(counter["network_requests_total"])
+        active_duration = max(float(counter["active_duration_seconds"]), wait_total)
+
+        recent_success = sum(
+            1
+            for r in recent_rows
+            if r["origin"] == "network" and r["classification"] in ("available", "unavailable", "invalid")
+        )
+        recent_rl = sum(1 for r in recent_rows if r["http_status"] == 429 or r["classification"] == "rate_limited")
+        recent_fail = sum(
+            1 for r in recent_rows if r["classification"] in ("network_error", "blocked_challenge", "uninterpretable")
+        )
+        consec_fail = health.consecutive_failures
+        consec_rl = health.consecutive_rate_limits
+
+        cooldown_deadline, _ = self.cooldown(route, scope=scope) if route else (0.0, "")
+        pending_cooldown = max(0.0, cooldown_deadline - current_now)
+        effective_window = active_duration + pending_cooldown
+
+        # Require at least 2 definitive network checks OR 1 check with a measured cooldown/window >= 5s
+        # before estimating throughput; never extrapolate local pacing into a completion promise.
+        rate_per_min: float | None = None
+        eta_seconds: float | None = None
+        if definitive_net >= 2 and effective_window >= 1.0:
+            rate_per_min = (definitive_net / effective_window) * 60.0
+        elif definitive_net >= 1 and (wait_total >= 5.0 or pending_cooldown >= 5.0):
+            rate_per_min = (definitive_net / max(effective_window, 5.0)) * 60.0
+
+        if rate_per_min is not None and rate_per_min > 0 and remaining_candidates > 0:
+            eta_seconds = pending_cooldown + (remaining_candidates / (rate_per_min / 60.0))
