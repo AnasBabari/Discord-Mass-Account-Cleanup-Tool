@@ -319,7 +319,33 @@ def run_username_checker(
     transport = RequestsTransport()
     owned_client: DiscordApiClient | PublicUsernameClient | None = None
     try:
-        pass
+        store = UsernameScanStore(store_path)
+        if public or client is None:
+            owned_client = PublicUsernameClient(store, transport=transport)
+        else:
+            owned_client = DiscordApiClient(
+                client.token,
+                transport=transport,
+                rate_limiter=client.rate_limiter,
+                base_url=client.base_url,
+                max_retries=client.max_retries,
+            )
+        scanner = UsernameScanner(store, owned_client)
+        account_id = scanner.identify()
+        store.recover_interrupted(account_id)
+        route = PUBLIC_CHECK_URL if (public or client is None) else "/users/@me/pomelo-attempt"
+        print("\nUsername Checker — results do not reserve names; claim them in Discord.")
+        print(
+            "Source: Discord public check (no login required)."
+            if public or client is None
+            else "Source: Signed-in Discord account."
+        )
+        print("Server cooldowns are saved across restarts. Ctrl+C pauses without skipping the pending name.")
+        print(f"Saved progress: {store.path}")
+        while True:
+            print(
+                "\n  [1] Exhaustive search\n  [2] Custom list\n  [3] Resume saved scan\n  [4] View available names\n  [5] Export results CSV\n  [6] Strategy / Pattern / Seeded search\n  [7] Watchlist\n  [8] Fresh live recheck\n  [9] Diagnostics & health\n  [Q] Back"
+            )
     except (KeyboardInterrupt, EOFError):
         pass
     except Exception as exc:
