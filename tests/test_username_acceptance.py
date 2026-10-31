@@ -403,3 +403,63 @@ def test_all_consumers_expire_or_cancel_during_cooldown_dispatches_zero_requests
         cancel_b.set()
         res_a = fut_a.result(timeout=1.0)
         res_b = fut_b.result(timeout=1.0)
+
+    assert wait_for_active_shared_requests(timeout=1.0) is True
+    assert transport.request.call_count == 0
+    assert res_a.status == "paused"
+    assert res_a.checked == 0
+    assert res_b.status == "paused"
+    assert res_b.checked == 0
+
+
+def test_cancellation_while_shared_request_is_in_flight_preserves_candidates(tmp_path: Path) -> None:
+    """Cancelling all consumers while a shared HTTP request is in flight pauses cleanly without marking checked."""
+    store = UsernameScanStore(tmp_path / "cancel_inflight.db")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_request(*args: Any, **kwargs: Any) -> MockResponse:
+        entered.set()
+        release.wait(timeout=2.0)
+        return MockResponse(status_code=200, json_data={"taken": False})
+
+    transport = MagicMock()
+    transport.request.side_effect = blocked_request
+
+    scanner_a = UsernameScanner(store, PublicUsernameClient(store, transport=transport, min_interval=0.0))
+    scanner_b = UsernameScanner(store, PublicUsernameClient(store, transport=transport, min_interval=0.0))
+    scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    scan_b = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    cancel_a = threading.Event()
+    cancel_b = threading.Event()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_a = pool.submit(scanner_a.run, scan_a.id, PUBLIC_USERNAME_SCOPE, cancel_a)
+        assert entered.wait(timeout=1.5)
+        fut_b = pool.submit(scanner_b.run, scan_b.id, PUBLIC_USERNAME_SCOPE, cancel_b)
+        time.sleep(0.03)
+        cancel_a.set()
+        cancel_b.set()
+        res_a = fut_a.result(timeout=1.5)
+        res_b = fut_b.result(timeout=1.5)
+        release.set()
+
+    assert wait_for_active_shared_requests(timeout=1.0) is True
+    assert res_a.status == "paused"
+    assert res_a.checked == 0
+    assert res_a.cursor == 0
+    assert res_b.status == "paused"
+    assert res_b.checked == 0
+    assert res_b.cursor == 0
+
+
+# ===========================================================================
+# Section 4: Fresh-Recheck Semantics
+# ===========================================================================
+
+
+def test_two_concurrent_forced_rechecks_share_single_new_observation(tmp_path: Path) -> None:
+    """Two overlapping forced rechecks bypass pre-existing cache and share a single new live network check."""
+    store = UsernameScanStore(tmp_path / "two_rechecks.db")
+    # Pre-existing cached observation 10s ago saying "abc" is unavailable
+    past = time.time() - 10.0
