@@ -747,5 +747,54 @@ class PublicUsernameClient:
                             policy=self.freshness_policy,
                             now=obs_clock,
                         )
+                        self.store.record_diagnostic(
+                            provider="public",
+                            scope=self.scope,
+                            route=PUBLIC_USERNAME_ENDPOINT,
+                            username=username,
+                            classification=status.value,
+                            origin="network",
+                            scan_id=scan_id,
+                            started_at=req_start_iso,
+                            completed_at=req_end_iso,
+                            http_status=200,
+                            latency_ms=latency_ms,
+                            ratelimit_limit=rl_meta.limit,
+                            ratelimit_remaining=rl_meta.remaining,
+                            ratelimit_reset_after=rl_meta.reset_after,
+                            ratelimit_bucket=rl_meta.bucket,
+                            ratelimit_scope=rl_meta.scope,
+                            ratelimit_global=rl_meta.is_global,
+                            retry_at=active_deadline if rl_meta.effective_delay > 0 else 0.0,
+                            retry_reason=rl_meta.reason,
+                            wait_seconds=waited_s,
+                            consecutive_failures=0,
+                            consecutive_rate_limits=0,
+                        )
+                        return cached_result
+
+                    if response.status_code == 400 and isinstance(payload, dict):
+                        errors = payload.get("errors")
+                        if isinstance(errors, dict) and errors.get("username"):
+                            self._consecutive_failures = 0
+                            self._consecutive_rate_limits = 0
+                            obs_clock = self.clock()
+                            obs_time = format_utc_timestamp(obs_clock) if self._uses_custom_clock else utc_now()
+                            rejected = UsernameCheckResult(
+                                username,
+                                UsernameStatus.INVALID,
+                                obs_time,
+                                "Discord rejected this username.",
+                                origin=ObservationOrigin.NETWORK.value,
+                                provider="public",
+                                observed_epoch=obs_clock,
+                            )
+                            cached_rejected = self.store.save_cached_observation(
+                                rejected,
+                                provider="public",
+                                scope=self.scope,
+                                policy=self.freshness_policy,
+                                now=obs_clock,
+                            )
             except Timeout:
                 pass
