@@ -1259,3 +1259,61 @@ class UsernameScanStore:
                 "UPDATE scans SET network_checked=network_checked+?, updated_at=? WHERE id=?",
                 (int(count), utc_now(), scan_id),
             )
+
+    def save_result(
+        self,
+        scan_id: str,
+        account_id: str,
+        result: UsernameCheckResult,
+        next_cursor: int | None,
+        *,
+        deduplicated: bool = False,
+        network_attempts_already_recorded: bool = False,
+    ) -> UsernameScan:
+        self.get_scan(scan_id, account_id)
+        provider = result.provider or ("public" if account_id == PUBLIC_USERNAME_SCOPE else "account")
+        origin = result.origin or ObservationOrigin.NETWORK.value
+        is_definitive_network = (
+            origin == ObservationOrigin.NETWORK.value
+            and result.status in (UsernameStatus.AVAILABLE, UsernameStatus.UNAVAILABLE, UsernameStatus.INVALID)
+            and not deduplicated
+        )
+        is_net = 0 if network_attempts_already_recorded else int(is_definitive_network)
+        is_cache = int(
+            origin in (ObservationOrigin.CACHE.value, ObservationOrigin.STALE_CACHE.value) and not deduplicated
+        )
+        is_dedup = int(deduplicated)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO results (scan_id,username,status,checked_at,message,origin,provider,expires_at,reused_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(scan_id,username) DO UPDATE SET "
+                "status=excluded.status,checked_at=excluded.checked_at,message=excluded.message,"
+                "origin=excluded.origin,provider=excluded.provider,expires_at=excluded.expires_at,reused_at=excluded.reused_at",
+                (
+                    scan_id,
+                    result.username,
+                    result.status.value,
+                    result.checked_at,
+                    result.message,
+                    origin,
+                    provider,
+                    result.expires_at,
+                    result.reused_at,
+                ),
+            )
+            if next_cursor is not None:
+                connection.execute(
+                    "UPDATE scans SET cursor=?,checked=checked+1,available=available+?,"
+                    "network_checked=network_checked+?,cache_hits=cache_hits+?,dedup_hits=dedup_hits+?,"
+                    "updated_at=? WHERE id=?",
+                    (
+                        next_cursor,
+                        int(result.status == UsernameStatus.AVAILABLE),
+                        is_net,
+                        is_cache,
+                        is_dedup,
+                        utc_now(),
+                        scan_id,
+                    ),
+                )
+        return self.get_scan(scan_id, account_id)
