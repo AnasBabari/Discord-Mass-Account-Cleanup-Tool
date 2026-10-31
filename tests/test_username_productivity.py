@@ -648,3 +648,63 @@ def test_simulated_workload_quantifies_requests_avoided(tmp_path):
 
     # Scan 2 (overlapping custom list): ["aaa", "aab", "gem", "new1", "bad.."]
     clock.now += 30.0
+    scan2 = store.create_scan(
+        PUBLIC_USERNAME_SCOPE,
+        mode="custom",
+        names=["aaa", "aab", "gem", "new1", "bad.."],
+    )
+    res2 = scanner.run(scan2.id, PUBLIC_USERNAME_SCOPE)
+    assert res2.status == "completed"
+    assert res2.checked == 5
+    assert res2.network_checks == 1  # Only "new1" hit the network!
+    assert res2.cache_hits == 3      # "aaa", "aab", "gem" served from cache!
+
+    diag = store.diagnostics_summary(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert diag.total_network_checks == 5
+    assert diag.total_cache_hits == 3
+    assert diag.total_local_invalid == 3
+    assert diag.total_requests_avoided == 6
+    assert transport.request.call_count == 5
+
+
+# ---------------------------------------------------------------------------
+# 9. Non-interactive CLI & Desktop UI controls + CSV provenance
+# ---------------------------------------------------------------------------
+
+
+def test_non_interactive_cli_preview_check_export_and_diagnostics(monkeypatch, tmp_path, capsys):
+    db_path = tmp_path / "cli_non_interactive.db"
+    csv_path = tmp_path / "cli_out.csv"
+    input_file = tmp_path / "candidates.txt"
+    input_file.write_text("cat, dog\nbad..\n", encoding="utf-8")
+
+    transport = MagicMock()
+    transport.request.side_effect = lambda method, url, json_data=None, **kw: MockResponse(
+        json_data={"taken": json_data["username"] != "cat"}
+    )
+    monkeypatch.setattr(cli, "RequestsTransport", lambda *a, **kw: transport)
+
+    # 1. Preview mode makes zero network calls
+    rc_prev = cli.run_username_cli_args(
+        ["--usernames", "--lengths", "3", "--strategy", "randomized", "--charset", "letters", "--pattern", "CVC", "--preview"],
+        store_path=db_path,
+    )
+    assert rc_prev == 0
+    assert "Candidate preview" in capsys.readouterr().out
+    transport.request.assert_not_called()
+
+    # 2. Check from input file + budget + export CSV
+    rc_run = cli.run_username_cli_args(
+        [
+            "--usernames",
+            "--input-file",
+            str(input_file),
+            "--max-network-requests",
+            "5",
+            "--export",
+            str(csv_path),
+        ],
+        store_path=db_path,
+    )
+    assert rc_run == 0
+    out_run = capsys.readouterr().out
