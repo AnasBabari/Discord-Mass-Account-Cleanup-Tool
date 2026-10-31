@@ -118,3 +118,63 @@ def test_page_pagination_uses_only_one_page(qtbot, tmp_path):
     page.change_page(100)
     assert page.table.rowCount() == 5
     assert not page.next_btn.isEnabled()
+
+
+def test_logout_discards_late_signals(qtbot, monkeypatch, tmp_path, fake_client):
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_check(name, **kwargs):
+        entered.set()
+        release.wait(3)
+        return UsernameCheckResult(name, UsernameStatus.AVAILABLE, utc_now())
+
+    fake_client.check_username_availability.side_effect = blocked_check
+    monkeypatch.setattr(
+        page_module,
+        "UsernameScanWorker",
+        lambda *args, **kwargs: UsernameScanWorker(*args, **kwargs, client=fake_client),
+    )
+    page = UsernamesPage(store_path=tmp_path / "scans.db")
+    qtbot.addWidget(page)
+    page.set_token("secret-token")
+    page.mode_input.setCurrentIndex(1)
+    page.custom_input.setPlainText("abc xyz")
+    page.start_scan()
+    worker = page.worker
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=3000)
+        page.clear()
+        page.set_token("another-account-token")
+        release.set()
+        qtbot.waitUntil(lambda: not worker.isRunning(), timeout=3000)
+        qtbot.waitUntil(lambda: not page._retired_workers, timeout=3000)
+        assert page.scan is None
+        assert page.table.rowCount() == 0
+        assert page.account_id == ""
+        assert worker.token == ""
+    finally:
+        release.set()
+        worker.wait(4000)
+
+
+def test_window_close_defers_for_active_scanner(qtbot, monkeypatch, tmp_path, fake_client):
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_check(name, **kwargs):
+        entered.set()
+        release.wait(3)
+        return UsernameCheckResult(name, UsernameStatus.AVAILABLE, utc_now())
+
+    fake_client.check_username_availability.side_effect = blocked_check
+    monkeypatch.setattr(
+        page_module,
+        "UsernameScanWorker",
+        lambda *args, **kwargs: UsernameScanWorker(*args, **kwargs, client=fake_client),
+    )
+    monkeypatch.setattr(app_module.MainWindow, "check_saved_token", lambda self: None)
+    monkeypatch.setattr(app_module.MainWindow, "setup_interceptors", lambda self: None)
+    window = app_module.MainWindow()
+    qtbot.addWidget(window)
+    page = window.usernames_page
+    page.store_path = tmp_path / "scans.db"
+    page.set_token("secret-token")
