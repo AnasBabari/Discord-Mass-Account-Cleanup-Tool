@@ -1042,3 +1042,57 @@ class UsernameScanStore:
         lengths = validate_lengths(lengths)
         prefs = preferences or CandidatePreferences()
         raw_names = list(dict.fromkeys(sanitize_token(name).lower().removeprefix("@") for name in (names or [])))
+        if mode == "custom" and prefs.strategy == "priority":
+            raw_names = rank_candidates_by_preference(raw_names)
+        elif mode == "watchlist" and not raw_names:
+            raw_names = [entry["username"] for entry in self.list_watchlist(account_id)]
+        if mode in ("custom", "watchlist"):
+            total = len(raw_names)
+            gen_version = 1
+            strategy = prefs.strategy if mode == "custom" else "watchlist"
+        else:
+            if mode == "priority" and raw_names and not prefs.priority_names:
+                prefs = CandidatePreferences(
+                    strategy="priority",
+                    charset_mode=prefs.charset_mode,
+                    allowed_chars=prefs.allowed_chars,
+                    pattern=prefs.pattern,
+                    seed=prefs.seed,
+                    priority_names=tuple(rank_candidates_by_preference(raw_names)),
+                )
+            total = candidate_count(lengths, prefs)
+            gen_version = generator_version_for_preferences(prefs)
+            strategy = prefs.strategy
+
+        if total == 0:
+            raise ValueError("Enter at least one username to check.")
+        scan_id, now = str(uuid.uuid4()), utc_now()
+        config_str = json.dumps(prefs.to_dict())
+        stored_mode = "custom" if mode == "watchlist" else ("generated" if mode == "priority" else mode)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO scans (id,account_id,mode,lengths,names,total,created_at,updated_at,"
+                "generator_version,strategy,config_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    scan_id,
+                    account_id,
+                    stored_mode,
+                    json.dumps(lengths),
+                    json.dumps(raw_names),
+                    total,
+                    now,
+                    now,
+                    gen_version,
+                    strategy,
+                    config_str,
+                ),
+            )
+        return self.get_scan(scan_id, account_id)
+
+    def scan_preferences(self, scan_id: str, account_id: str) -> CandidatePreferences:
+        scan = self.get_scan(scan_id, account_id)
+        try:
+            data = json.loads(scan.config_json or "{}")
+        except (ValueError, TypeError):
+            data = {}
+        return CandidatePreferences.from_dict(data)
