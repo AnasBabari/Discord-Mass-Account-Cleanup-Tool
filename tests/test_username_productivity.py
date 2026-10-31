@@ -530,3 +530,63 @@ def test_seeded_randomized_traversal_is_bijective_and_resumable_from_cursor(tmp_
     )
     total = candidate_count((3,), prefs)
     # 20 consonants * 6 vowels * 20 consonants = 2400 CVC 3-char names
+    assert total == 20 * 6 * 20
+
+    # Collect first 10 in one pass
+    seq_full: list[str] = []
+    cur = 0
+    for _ in range(10):
+        item = next_generated_candidate((3,), cur, prefs)
+        assert item is not None
+        name, cur = item
+        seq_full.append(name)
+        assert matches_pattern(name, "CVC")
+
+    # Run via UsernameScanner in two slices (5 checks, pause, reopen store, 5 checks)
+    clock = FakeClock(1000.0)
+    store = UsernameScanStore(tmp_path / "rand_scan.db")
+    checked_order: list[str] = []
+
+    def record_request(method, url, json_data=None, **kwargs):
+        checked_order.append(json_data["username"])
+        return MockResponse(json_data={"taken": True})
+
+    transport = MagicMock()
+    transport.request.side_effect = record_request
+    client = PublicUsernameClient(store, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    scanner = UsernameScanner(store, client, clock=clock, monotonic=clock)
+
+    scan = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="generated", lengths=(3,), preferences=prefs)
+    assert scan.generator_version == GENERATOR_VERSION_V2
+    part1 = scanner.run(scan.id, PUBLIC_USERNAME_SCOPE, max_checks=5)
+    assert part1.status == "paused"
+    assert part1.checked == 5
+
+    reopened = UsernameScanStore(store.path)
+    client2 = PublicUsernameClient(reopened, transport=transport, min_interval=0, clock=clock, wait=clock.wait)
+    part2 = UsernameScanner(reopened, client2, clock=clock, monotonic=clock).run(
+        scan.id, PUBLIC_USERNAME_SCOPE, max_checks=5
+    )
+    assert part2.checked == 10
+    assert checked_order == seq_full
+    assert len(set(checked_order)) == 10
+
+
+def test_priority_heuristic_and_candidate_preview():
+    names = ["z_9.", "abc", "kora", "cat", "a.."]
+    ranked = rank_candidates_by_preference(names)
+    # 3-char pronounceable "cat" and letter-only "abc" rank ahead of 4-char "kora", punctuation "z_9.", and invalid "a.."
+    assert ranked[0] == "cat"
+    assert ranked[1] == "abc"
+    assert ranked[-1] == "a.."
+    assert preference_score("cat") < preference_score("z_9.")
+
+    prefs = CandidatePreferences(strategy="priority", charset_mode="letters", pattern="pronounceable")
+    prev = preview_candidates("generated", (3,), [], prefs, sample_size=5)
+    assert prev.total_candidates > 0
+    assert len(prev.sample_candidates) == 5
+    assert "heuristic" in prev.strategy_summary.lower() or "predict" in prev.strategy_summary.lower()
+
+
+def test_default_exhaustive_preserves_generator_v1(tmp_path):
+    store = UsernameScanStore(tmp_path / "v1.db")
