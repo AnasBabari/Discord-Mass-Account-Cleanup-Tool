@@ -5,7 +5,7 @@ import sys
 from typing import Any
 
 import qtawesome as qta
-from PyQt5.QtCore import QObject, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QObject, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QCursor, QFont, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -29,6 +29,7 @@ from discord_cleanup.ui.pages.login import LoginPage
 from discord_cleanup.ui.pages.logs import LogsPage
 from discord_cleanup.ui.pages.notifications import NotificationsPage
 from discord_cleanup.ui.pages.servers import ServersPage
+from discord_cleanup.ui.pages.usernames import UsernamesPage
 from discord_cleanup.ui.theme import (
     ACCENT,
     DANGER,
@@ -38,6 +39,7 @@ from discord_cleanup.ui.theme import (
     load_stylesheet,
 )
 from discord_cleanup.workers.login import LoginWorker
+from discord_cleanup.workers.usernames import UsernameResultsWorker, UsernameScanWorker
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.active_workers: list[Any] = []
         self.current_token: str = ""
+        self.public_username_mode = False
+        self._login_generation = 0
         self.user_display_name: str = ""
         self.user_handle: str = ""
         self.avatar_pixmap: QPixmap | None = None
@@ -157,9 +161,10 @@ class MainWindow(QMainWindow):
         self.btn_friends = self._create_nav_btn(" Friends", "fa5s.user-friends", 1)
         self.btn_blocked = self._create_nav_btn(" Blocked Users", "fa5s.user-slash", 2)
         self.btn_notifs = self._create_nav_btn(" Notifications", "fa5s.bell", 3)
-        self.btn_logs = self._create_nav_btn(" Activity Logs", "fa5s.terminal", 4)
+        self.btn_usernames = self._create_nav_btn(" Usernames", "fa5s.search", 4)
+        self.btn_logs = self._create_nav_btn(" Activity Logs", "fa5s.terminal", 5)
 
-        for btn in (self.btn_servers, self.btn_friends, self.btn_blocked, self.btn_notifs, self.btn_logs):
+        for btn in (self.btn_servers, self.btn_friends, self.btn_blocked, self.btn_notifs, self.btn_usernames, self.btn_logs):
             s_layout.addWidget(btn)
 
         s_layout.addStretch()
@@ -217,6 +222,7 @@ class MainWindow(QMainWindow):
         # 3. Initialize Pages
         self.login_page = LoginPage()
         self.login_page.login_requested.connect(self.handle_login_request)
+        self.login_page.public_usernames_requested.connect(self.show_public_username_checker)
         self.main_stack.addWidget(self.login_page)  # index 0
 
         self.servers_page = ServersPage(worker_tracker=self.track_worker)
@@ -239,8 +245,12 @@ class MainWindow(QMainWindow):
         self.notifs_page.action_finished.connect(lambda: self.show_toast("Notifications marked read", msg_type="success"))
         self.main_stack.addWidget(self.notifs_page)  # index 4
 
+        self.usernames_page = UsernamesPage(worker_tracker=self.track_worker)
+        self.usernames_page.log_msg_signal.connect(self.log_message)
+        self.main_stack.addWidget(self.usernames_page)  # index 5
+
         self.logs_page = LogsPage()
-        self.main_stack.addWidget(self.logs_page)  # index 5
+        self.main_stack.addWidget(self.logs_page)  # index 6
 
         # Toast Overlay
         self.toast = ToastOverlay(self)
@@ -290,17 +300,24 @@ class MainWindow(QMainWindow):
             self.handle_login_request(token, save=False)
 
     def handle_login_request(self, token: str, save: bool) -> None:
+        self.public_username_mode = False
+        self._login_generation += 1
+        generation = self._login_generation
         self.login_page.set_loading(True)
         if self.login_worker is not None and self.login_worker.isRunning():
             self.login_worker.cancel()
 
         self.login_worker = self.track_worker(LoginWorker(token, save=save))
-        self.login_worker.result_signal.connect(self.on_login_finished)
+        self.login_worker.result_signal.connect(
+            lambda *args: self.on_login_finished(*args) if generation == self._login_generation else None
+        )
         self.login_worker.start()
 
     def on_login_finished(
         self, success: bool, name: str, username: str, token: str, avatar_bytes: bytes, save: bool
     ) -> None:
+        if self.public_username_mode:
+            return
         self.login_page.set_loading(False)
         if success:
             self.current_token = token
@@ -327,6 +344,7 @@ class MainWindow(QMainWindow):
             self.friends_page.set_token(token)
             self.blocked_page.set_token(token)
             self.notifs_page.set_token(token)
+            self.usernames_page.set_token(token)
 
             self.show_logged_in_state()
             self.navigate_to_page(0)  # Go to servers page
@@ -337,15 +355,38 @@ class MainWindow(QMainWindow):
             self.log_message(f"Login failed: {name}", "error")
 
     def show_logged_in_state(self) -> None:
+        self.public_username_mode = False
+        for button in (self.btn_servers, self.btn_friends, self.btn_blocked, self.btn_notifs):
+            button.setEnabled(True)
+        self.logout_btn.setText(" Sign Out")
         self.sidebar.show()
         self.btn_servers.setChecked(True)
 
     def show_logged_out_state(self) -> None:
+        self.public_username_mode = False
         self.sidebar.hide()
         self.main_stack.setCurrentIndex(0)
 
+    def show_public_username_checker(self) -> None:
+        self.public_username_mode = True
+        self._login_generation += 1
+        if self.login_worker is not None and self.login_worker.isRunning():
+            self.login_worker.cancel()
+        self.login_page.set_loading(False)
+        self.usernames_page.set_token("")
+        self.sidebar.show()
+        for button in (self.btn_servers, self.btn_friends, self.btn_blocked, self.btn_notifs):
+            button.setEnabled(False)
+        self.p_name.setText("Public checker")
+        self.p_tag.setText("No login")
+        self.logout_btn.setText(" Back to Sign In")
+        self.btn_usernames.setChecked(True)
+        self.navigate_to_page(4)
+
     def navigate_to_page(self, index: int) -> None:
-        # Map navigation index (0..4) to main_stack page index (1..5)
+        if self.public_username_mode and index in (0, 1, 2, 3):
+            return
+        # Navigation pages follow the login page in the main stack.
         stack_index = index + 1
         self.main_stack.setCurrentIndex(stack_index)
         if index == 0:
@@ -356,8 +397,10 @@ class MainWindow(QMainWindow):
             self.blocked_page.fetch_data()
 
     def logout(self) -> None:
+        self._login_generation += 1
         self.cancel_all_workers()
-        DEFAULT_CREDENTIAL_STORE.delete_token()
+        if self.current_token:
+            DEFAULT_CREDENTIAL_STORE.delete_token()
         self.current_token = ""
         self.user_display_name = ""
         self.user_handle = ""
@@ -366,6 +409,7 @@ class MainWindow(QMainWindow):
         self.friends_page.clear()
         self.blocked_page.clear()
         self.notifs_page.clear()
+        self.usernames_page.clear()
         self.login_page.clear()
 
         self.avatar_lbl.setPixmap(qta.icon("fa5s.user", color=ACCENT).pixmap(QSize(18, 18)))
