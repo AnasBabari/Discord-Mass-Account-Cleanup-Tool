@@ -162,3 +162,62 @@ CREATE TABLE IF NOT EXISTS watchlist (
     PRIMARY KEY (account_id, username)
 );
 """
+
+
+class UsernameScanStore:
+    """Transactional checkpoints, observation cache, diagnostics, and scheduling store; no credentials stored."""
+
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        max_diagnostics_rows: int = MAX_DIAGNOSTICS_ROWS,
+        *,
+        clock: Callable[[], float] = time.time,
+    ):
+        self.path = (
+            (
+                Path(path)
+                if path is not None
+                else user_data_path("DiscordMassCleanupTool", appauthor=False) / "usernames.sqlite3"
+            )
+            .expanduser()
+            .resolve()
+        )
+        self.max_diagnostics_rows = max(10, int(max_diagnostics_rows))
+        self.clock = clock
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize_or_migrate()
+
+    def _initialize_or_migrate(self) -> None:
+        with self._connect() as connection:
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version not in (0, 1, 2, SCHEMA_VERSION):
+                raise ValueError("This username database was created by a newer application version.")
+            connection.execute("PRAGMA journal_mode=WAL")
+            if version == SCHEMA_VERSION:
+                # Fast-path open: verify core tables exist without scanning or altering tables
+                has_tables = (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                        "AND name IN ('scans', 'results', 'username_cooldowns', 'observation_cache', 'schema_meta')"
+                    ).fetchone()[0]
+                    == 5
+                )
+                if has_tables:
+                    mig_done = connection.execute(
+                        "SELECT value FROM schema_meta WHERE key='migration_v3_complete'"
+                    ).fetchone()
+                    if mig_done is not None and str(mig_done[0]) == "1":
+                        return
+
+            connection.executescript(BASE_SCHEMA)
+            self._ensure_columns(connection)
+            if version == 0:
+                connection.execute(
+                    "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('migration_v3_complete', '1')"
+                )
+                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                return
+
+        # Version 1 or 2 (or interrupted v3 backfill): run bounded-batch backfill once
+        self._run_bounded_backfill()
