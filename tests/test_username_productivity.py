@@ -291,3 +291,62 @@ def test_open_circuit_enforced_at_dispatch_boundary_across_scans_and_store_insta
     assert transport.request.call_count == 0
 
     # 4. Resetting health while an active server cooldown exists transitions to WAITING_COOLDOWN
+    #    and preserves the cooldown; before reset, consecutive_failures (3) is persisted in SQLite.
+    assert store.get_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now).consecutive_failures == 3
+    store.save_cooldown(PUBLIC_CHECK_URL, 5050.0, "Rate limited")
+    reset_h = store.reset_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert reset_h.state == ProviderHealthState.WAITING_COOLDOWN
+    assert reset_h.consecutive_failures == 0
+
+    res_after_reset = scanner.run(scan.id, PUBLIC_USERNAME_SCOPE)
+    assert res_after_reset.status == "completed"
+    assert res_after_reset.checked == 3
+    assert transport.request.call_count == 1
+    assert clock.now >= 5050.0
+    final_h = store.get_provider_health(PUBLIC_USERNAME_SCOPE, route=PUBLIC_CHECK_URL, now=clock.now)
+    assert final_h.state == ProviderHealthState.READY
+    assert final_h.consecutive_failures == 0
+
+
+# ---------------------------------------------------------------------------
+# 3. Observation cache: freshness TTLs, original timestamps, scope isolation
+# ---------------------------------------------------------------------------
+
+
+def test_observation_cache_ttls_original_timestamps_and_scope_isolation(tmp_path):
+    clock = FakeClock(10000.0)
+    store = UsernameScanStore(tmp_path / "cache.db")
+    policy = CacheFreshnessPolicy(available_ttl_seconds=300.0, unavailable_ttl_seconds=3600.0)
+    transport = MagicMock()
+    transport.request.side_effect = [
+        MockResponse(json_data={"taken": False}),  # "abc" -> available at t=10000
+        MockResponse(json_data={"taken": True}),   # "xyz" -> unavailable at t=10000
+    ]
+    client = PublicUsernameClient(
+        store,
+        transport=transport,
+        min_interval=0,
+        clock=clock,
+        wait=clock.wait,
+        freshness_policy=policy,
+    )
+    scanner = UsernameScanner(store, client, freshness_policy=policy, clock=clock, monotonic=clock)
+
+    scan1 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc", "xyz"])
+    done1 = scanner.run(scan1.id, PUBLIC_USERNAME_SCOPE)
+    assert done1.checked == 2
+    assert done1.network_checks == 2
+    assert done1.cache_hits == 0
+    assert transport.request.call_count == 2
+
+    original_abc_ts = store.results(scan1.id, PUBLIC_USERNAME_SCOPE, False)[0][0].checked_at
+    assert original_abc_ts == format_utc_timestamp(10000.0)
+
+    # Advance 120s (t=10120): both "abc" (TTL 300s) and "xyz" (TTL 3600s) are fresh in cache
+    clock.now = 10120.0
+    scan2 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc", "xyz"])
+    done2 = scanner.run(scan2.id, PUBLIC_USERNAME_SCOPE)
+    assert done2.checked == 2
+    assert done2.network_checks == 0
+    assert done2.cache_hits == 2
+    assert transport.request.call_count == 2  # 0 new network calls!
