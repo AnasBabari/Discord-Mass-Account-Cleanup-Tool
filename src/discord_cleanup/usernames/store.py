@@ -1210,3 +1210,52 @@ class UsernameScanStore:
 
     def recover_interrupted(self, account_id: str) -> None:
         """Mark orphaned running scans paused, without disturbing a live writer."""
+        for scan in self.list_scans(account_id):
+            if scan.status == "running":
+                try:
+                    with self.lock(scan.id):
+                        self.set_status(
+                            scan.id,
+                            account_id,
+                            "paused",
+                            pause_reason="Recovered after unexpected interruption",
+                        )
+                except LockTimeout:
+                    pass
+
+    def custom_names(self, scan_id: str, account_id: str) -> list[str]:
+        self.get_scan(scan_id, account_id)
+        with self._connect() as connection:
+            row = connection.execute("SELECT names FROM scans WHERE id=?", (scan_id,)).fetchone()
+        return list(json.loads(row[0]))
+
+    def set_status(
+        self,
+        scan_id: str,
+        account_id: str,
+        status: str,
+        error: str = "",
+        *,
+        pause_reason: str | None = None,
+    ) -> UsernameScan:
+        current = self.get_scan(scan_id, account_id)
+        effective_pause_reason = (
+            sanitize_token(pause_reason)
+            if pause_reason is not None
+            else (current.pause_reason if status == "paused" else "")
+        )
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE scans SET status=?,error=?,pause_reason=?,updated_at=? WHERE id=? AND account_id=?",
+                (status, sanitize_token(error), effective_pause_reason, utc_now(), scan_id, account_id),
+            )
+        return self.get_scan(scan_id, account_id)
+
+    def increment_scan_network_checks(self, scan_id: str, count: int = 1) -> None:
+        if not scan_id or count <= 0:
+            return
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE scans SET network_checked=network_checked+?, updated_at=? WHERE id=?",
+                (int(count), utc_now(), scan_id),
+            )
