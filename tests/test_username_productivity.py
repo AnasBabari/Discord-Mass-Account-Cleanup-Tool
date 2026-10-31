@@ -350,3 +350,63 @@ def test_observation_cache_ttls_original_timestamps_and_scope_isolation(tmp_path
     assert done2.network_checks == 0
     assert done2.cache_hits == 2
     assert transport.request.call_count == 2  # 0 new network calls!
+
+    results2, _ = store.results(scan2.id, PUBLIC_USERNAME_SCOPE, False, now=clock.now)
+    by_name = {r.username: r for r in results2}
+    # Original checked_at timestamp MUST survive cache reuse!
+    assert by_name["abc"].checked_at == original_abc_ts
+    assert by_name["abc"].is_cached is True
+    assert by_name["abc"].is_stale is False
+    assert by_name["abc"].display_status == "available (cached)"
+
+    # Advance to t=10400 (400s elapsed): "abc" (available, TTL 300s) is now STALE; "xyz" (unavailable, TTL 3600s) is still FRESH
+    clock.now = 10400.0
+    results2_stale_view, _ = store.results(scan2.id, PUBLIC_USERNAME_SCOPE, False, now=clock.now)
+    by_name_stale = {r.username: r for r in results2_stale_view}
+    assert by_name_stale["abc"].is_stale is True
+    assert by_name_stale["abc"].display_status == "available (historical)"
+    assert by_name_stale["xyz"].is_stale is False
+    assert by_name_stale["xyz"].display_status == "unavailable (cached)"
+
+    # Running a new scan at t=10400 must recheck "abc" over the network while still reusing "xyz" from cache!
+    transport.request.side_effect = [MockResponse(json_data={"taken": False})]
+    scan3 = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc", "xyz"])
+    done3 = scanner.run(scan3.id, PUBLIC_USERNAME_SCOPE)
+    assert done3.network_checks == 1
+    assert done3.cache_hits == 1
+    assert transport.request.call_count == 3
+
+    # Verify strict scope isolation: account-one does NOT reuse public cache entries
+    assert store.get_cached_observation("abc", provider="account", scope="account-one", now=clock.now) is None
+
+
+def test_operational_errors_are_never_cached(tmp_path):
+    clock = FakeClock(2000.0)
+    store = UsernameScanStore(tmp_path / "no_err_cache.db")
+    err_res = UsernameCheckResult("abc", UsernameStatus.ERROR, format_utc_timestamp(clock.now), "Timeout")
+    store.save_cached_observation(err_res, provider="public", scope=PUBLIC_USERNAME_SCOPE, now=clock.now)
+    assert store.get_cached_observation("abc", provider="public", scope=PUBLIC_USERNAME_SCOPE, now=clock.now) is None
+
+
+# ---------------------------------------------------------------------------
+# 4. Concurrent in-flight deduplication & multi-consumer cooperative cancel
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_request_deduplication_and_cooperative_cancellation(tmp_path):
+    store = UsernameScanStore(tmp_path / "dedup.db")
+    entered = threading.Event()
+    release = threading.Event()
+    network_calls = 0
+    call_lock = threading.Lock()
+
+    def slow_request(*args, **kwargs):
+        nonlocal network_calls
+        with call_lock:
+            network_calls += 1
+        entered.set()
+        release.wait(timeout=3.0)
+        return MockResponse(json_data={"taken": False})
+
+    transport1 = MagicMock()
+    transport1.request.side_effect = slow_request
