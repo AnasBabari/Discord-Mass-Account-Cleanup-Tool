@@ -448,3 +448,7 @@ class PublicUsernameClient:
             waited_s = self._wait_until_ready(
                 event, on_backoff, max_wait_deadline_mono=max_wait_deadline_mono
             )
+            try:
+                pass
+            except Timeout:
+                pass
