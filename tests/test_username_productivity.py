@@ -708,3 +708,61 @@ def test_non_interactive_cli_preview_check_export_and_diagnostics(monkeypatch, t
     )
     assert rc_run == 0
     out_run = capsys.readouterr().out
+    assert "AVAILABLE: cat" in out_run
+    assert transport.request.call_count == 2  # "cat" and "dog" (while "bad.." rejected locally)
+
+    # 3. Second run reuses cache and marks provenance in CSV
+    csv_path2 = tmp_path / "cli_out_cached.csv"
+    rc_cached = cli.run_username_cli_args(
+        ["--usernames", "--check", "cat,dog", "--export", str(csv_path2)],
+        store_path=db_path,
+    )
+    assert rc_cached == 0
+    out_cached = capsys.readouterr().out
+    assert "(cached)" in out_cached
+    assert transport.request.call_count == 2  # No additional network requests!
+
+    with csv_path2.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 2
+    assert rows[0]["username"] == "cat"
+    assert rows[0]["provenance"] == "cached"
+    assert rows[0]["expires_at_utc"] != ""
+
+    # 4. Diagnostics flag prints summary
+    rc_diag = cli.run_username_cli_args(["--usernames", "--diagnostics"], store_path=db_path)
+    assert rc_diag == 0
+    diag_out = capsys.readouterr().out
+    assert "Cache Hits Reused:" in diag_out
+
+
+def test_desktop_page_minimum_size_strategy_watchlist_and_health_reset(qtbot, monkeypatch, tmp_path):
+    store_path = tmp_path / "ui_new.db"
+    store = UsernameScanStore(store_path)
+    store.save_cooldown(PUBLIC_CHECK_URL, time.time() + 1200, "Rate limited")
+    store.save_provider_health(PUBLIC_USERNAME_SCOPE, ProviderHealthState.PAUSED_FAILURES, "Network error")
+
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(json_data={"taken": False})
+    client = PublicUsernameClient(store, transport=transport, min_interval=0)
+
+    monkeypatch.setattr(
+        page_module,
+        "UsernameScanWorker",
+        lambda *args, **kwargs: UsernameScanWorker(*args, **kwargs, client=client),
+    )
+
+    page = UsernamesPage(store_path=store_path)
+    page.resize(1000, 680)
+    qtbot.addWidget(page)
+
+    # Add to watchlist via custom_input
+    page.mode_input.setCurrentIndex(1)  # Custom list
+    page.custom_input.setPlainText("fox, owl")
+    page.add_selected_to_watchlist()
+    assert "Added 2" in page.status_label.text()
+
+    # Reset health preserves active server cooldown
+    page.reset_provider_health()
+    assert "cooldown remains enforced" in page.status_label.text()
+    assert store.cooldown(PUBLIC_CHECK_URL)[0] > time.time()
