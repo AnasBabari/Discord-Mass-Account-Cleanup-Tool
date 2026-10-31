@@ -1454,6 +1454,64 @@ class UsernameScanStore:
             raise ValueError("Choose an export file different from the scan database.")
         temporary: Path | None = None
         try:
-            pass
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                newline="",
+                encoding="utf-8",
+                dir=destination.parent,
+                prefix=f".{destination.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as output:
+                temporary = Path(output.name)
+                writer = csv.writer(output)
+                writer.writerow(
+                    [
+                        "username",
+                        "status",
+                        "checked_at_utc",
+                        "message",
+                        "source",
+                        "provenance",
+                        "expires_at_utc",
+                        "freshness",
+                    ]
+                )
+                for result in self.iter_results(scan_id, account_id, available_only, now=eval_now):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RequestCancelledError("Username export cancelled.")
+                    source = "Discord public check" if account_id == PUBLIC_USERNAME_SCOPE else "Discord account check"
+                    status_str = "unverified" if result.status == UsernameStatus.ERROR else result.status.value
+                    freshness_str = (
+                        "unverified"
+                        if result.status == UsernameStatus.ERROR
+                        else "local"
+                        if result.origin == ObservationOrigin.LOCAL.value
+                        else "historical"
+                        if result.is_stale
+                        else "fresh"
+                    )
+                    provenance_str = (
+                        "cached"
+                        if result.origin == ObservationOrigin.CACHE.value
+                        else "historical"
+                        if result.origin == ObservationOrigin.STALE_CACHE.value
+                        else "local_validation"
+                        if result.origin == ObservationOrigin.LOCAL.value
+                        else "live_network"
+                    )
+                    cells = [
+                        result.username,
+                        status_str,
+                        result.checked_at,
+                        result.message,
+                        source,
+                        provenance_str,
+                        result.expires_at,
+                        freshness_str,
+                    ]
+                    writer.writerow(
+                        ["'" + cell if cell.startswith(("=", "+", "-", "@", "\t", "\r")) else cell for cell in cells]
+                    )
         finally:
             pass
