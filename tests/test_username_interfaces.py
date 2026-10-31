@@ -284,3 +284,63 @@ def test_public_queue_pause_and_reload_keeps_cooldown(qtbot, monkeypatch, tmp_pa
     page.custom_input.setPlainText("abc")
     page.start_scan()
     worker = page.worker
+    try:
+        qtbot.waitUntil(lambda: "Rate limited" in page.status_label.text(), timeout=3000)
+        assert "saved across restarts" in page.cooldown_label.text()
+        page.pause_scan()
+        qtbot.waitUntil(lambda: not worker.isRunning(), timeout=3000)
+        qtbot.waitUntil(lambda: page.start_btn.isEnabled(), timeout=3000)
+        assert page.scan.status == "paused"
+        assert page.scan.checked == 0
+        assert store.cooldown(client.url)[0] == deadline
+        transport.request.assert_not_called()
+        page.clear()
+        page.load_scans()
+        qtbot.waitUntil(lambda: not page.worker.isRunning(), timeout=3000)
+        qtbot.waitUntil(lambda: page.history_input.count() == 1, timeout=3000)
+        assert page.resume_btn.isEnabled()
+        assert "cooldown" in page.cooldown_label.text()
+        transport.request.assert_not_called()
+    finally:
+        worker.cancel()
+        worker.wait(4000)
+        if page.worker is not None:
+            page.worker.cancel()
+            page.worker.wait(4000)
+
+
+def test_cli_public_mode_uses_direct_results_without_login(monkeypatch, tmp_path, capsys):
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(json_data={"taken": False})
+    monkeypatch.setattr(cli, "RequestsTransport", lambda: transport)
+    answers = iter(["2", "abc a..", "", "4", "1", "q"])
+    monkeypatch.setattr("builtins.input", lambda *args: next(answers))
+    cli.run_username_checker(store_path=tmp_path / "public.db")
+    output = capsys.readouterr().out
+    assert "no login required" in output
+    assert "AVAILABLE: abc" in output
+    assert transport.request.call_count == 1
+    assert "headers" not in transport.request.call_args.kwargs
+
+
+def test_public_cli_entry_does_not_read_credentials(monkeypatch):
+    from discord_cleanup import __main__ as module_main
+
+    cli_main = import_module("discord_cleanup.cli.main")
+
+    calls = []
+    monkeypatch.setattr("sys.argv", ["discord-cleanup", "--usernames"])
+    monkeypatch.setattr(
+        cli_main.DEFAULT_CREDENTIAL_STORE, "get_token", lambda: pytest.fail("Public mode read a credential")
+    )
+    monkeypatch.setattr(cli_main, "run_username_checker", lambda: calls.append("entry"))
+    monkeypatch.setattr(cli, "run_username_checker", lambda: calls.append("module"))
+    cli_main.main()
+    module_main.main()
+    assert calls == ["entry", "module"]
+
+
+def test_public_and_existing_account_scans_stay_separate(qtbot, monkeypatch, tmp_path, fake_client):
+    path = tmp_path / "mixed.db"
+    store = UsernameScanStore(path)
+    private = store.create_scan("account-one", mode="custom", names=["abc"])
