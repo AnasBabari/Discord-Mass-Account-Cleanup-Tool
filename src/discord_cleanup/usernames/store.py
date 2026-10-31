@@ -668,3 +668,38 @@ class UsernameScanStore:
             exp_str = format_utc_timestamp(exp_epoch)
 
         clean_msg = sanitize_token(result.message)
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO observation_cache (username, provider, scope, status, observed_at, observed_epoch, "
+                "expires_at, expires_epoch, message, provenance) VALUES (?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(username, provider, scope) DO UPDATE SET "
+                "status=excluded.status, observed_at=excluded.observed_at, observed_epoch=excluded.observed_epoch, "
+                "expires_at=excluded.expires_at, expires_epoch=excluded.expires_epoch, message=excluded.message, "
+                "provenance=excluded.provenance "
+                "WHERE excluded.observed_epoch >= observation_cache.observed_epoch",
+                (
+                    result.username.lower(),
+                    provider,
+                    scope,
+                    result.status.value,
+                    observed_at,
+                    obs_epoch,
+                    exp_str,
+                    exp_epoch,
+                    clean_msg,
+                    result.origin or ObservationOrigin.NETWORK.value,
+                ),
+            )
+        return UsernameCheckResult(
+            username=result.username,
+            status=result.status,
+            checked_at=observed_at,
+            message=clean_msg,
+            origin=result.origin or ObservationOrigin.NETWORK.value,
+            provider=provider,
+            expires_at=exp_str,
+            reused_at=result.reused_at,
+            observed_epoch=obs_epoch,
+            expires_epoch=exp_epoch,
+            _clock=bound_clock,
+        )
