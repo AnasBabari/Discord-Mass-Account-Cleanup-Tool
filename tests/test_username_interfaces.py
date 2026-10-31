@@ -344,3 +344,59 @@ def test_public_and_existing_account_scans_stay_separate(qtbot, monkeypatch, tmp
     path = tmp_path / "mixed.db"
     store = UsernameScanStore(path)
     private = store.create_scan("account-one", mode="custom", names=["abc"])
+    public = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["xyz"])
+    monkeypatch.setattr(
+        page_module,
+        "UsernameScanWorker",
+        lambda *args, **kwargs: UsernameScanWorker(*args, **kwargs, client=fake_client),
+    )
+    page = UsernamesPage(store_path=path)
+    qtbot.addWidget(page)
+    page.set_token("secret-token")
+    page.provider_input.setCurrentIndex(1)
+    page.load_scans()
+    qtbot.waitUntil(lambda: page.worker is not None and not page.worker.isRunning(), timeout=3000)
+    qtbot.waitUntil(lambda: page.scan is not None, timeout=3000)
+    assert page.scan.id == private.id
+    assert fake_client.verify_token.call_count == 1
+    page.provider_input.setCurrentIndex(0)
+    page.load_scans()
+    qtbot.waitUntil(lambda: not page.worker.isRunning(), timeout=3000)
+    qtbot.waitUntil(lambda: page.scan is not None, timeout=3000)
+    assert page.scan.id == public.id
+    assert fake_client.verify_token.call_count == 1
+
+
+def test_public_worker_constructs_only_the_public_client(qtbot, monkeypatch, tmp_path):
+    worker_module = import_module("discord_cleanup.workers.usernames")
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(json_data={"taken": False})
+    monkeypatch.setattr(worker_module, "RequestsTransport", lambda: transport)
+    worker = UsernameScanWorker(
+        "", mode="custom", custom_text="abc", store_path=tmp_path / "public.db", access="public"
+    )
+    completed = []
+    worker.completed_signal.connect(completed.append)
+    with qtbot.waitSignal(worker.finished, timeout=3000):
+        worker.start()
+    assert completed[0].available == 1
+    assert transport.request.call_count == 1
+    assert transport.request.call_args.args[0] == "POST"
+    assert "username-attempt-unauthed" in transport.request.call_args.args[1]
+    assert "headers" not in transport.request.call_args.kwargs
+    transport.close.assert_called_once()
+
+
+def test_leaving_public_mode_discards_a_stale_login_result(qtbot, monkeypatch):
+    monkeypatch.setattr(app_module.MainWindow, "check_saved_token", lambda self: None)
+    monkeypatch.setattr(app_module.MainWindow, "setup_interceptors", lambda self: None)
+    monkeypatch.setattr(app_module.LoginWorker, "start", lambda self: None)
+    window = app_module.MainWindow()
+    qtbot.addWidget(window)
+    window.handle_login_request("old-token", save=False)
+    previous = window.login_worker
+    window.show_public_username_checker()
+    window.logout()
+    previous.result_signal.emit(True, "Unexpected", "stale", "old-token", b"", False)
+    assert window.current_token == ""
+    assert window.main_stack.currentWidget() is window.login_page
