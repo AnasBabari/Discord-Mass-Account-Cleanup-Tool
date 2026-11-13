@@ -78,6 +78,8 @@ Designed with a strict multi-layered architecture, coordinated rate-limiting bac
 
 ### Prerequisites
 - Python 3.10, 3.11, 3.12, 3.13, or 3.14
+
+Python 3.11 or newer is recommended: the security fixes in filelock 4.2.1 and later require Python 3.11. Python 3.10 uses the latest compatible filelock 3.x release, which remains affected by upstream advisories.
 - Operating System: Windows, Linux, or macOS
 
 ### 1. Clone & Setup Environment
