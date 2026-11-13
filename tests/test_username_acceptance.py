@@ -510,7 +510,7 @@ def test_two_concurrent_forced_rechecks_share_single_new_observation(tmp_path: P
     assert res_a.deduplicated_hits + res_b.deduplicated_hits == 1
 
 
-def test_ordinary_check_joined_by_forced_recheck_enforces_fresh_live_observation(tmp_path: Path) -> None:
+def test_ordinary_check_joined_by_forced_recheck_enforces_fresh_live_observation(tmp_path: Path, monkeypatch) -> None:
     """An ordinary check waiting on candidate lock joined by a forced recheck rejects older cache and dispatches live."""
     store = UsernameScanStore(tmp_path / "ordinary_then_recheck.db")
     older_epoch = time.time() - 5.0
@@ -529,15 +529,34 @@ def test_ordinary_check_joined_by_forced_recheck_enforces_fresh_live_observation
     scanner_b = UsernameScanner(store, PublicUsernameClient(store, transport=transport, min_interval=0.0))
 
     scan_a = store.create_scan(PUBLIC_USERNAME_SCOPE, mode="custom", names=["abc"])
+    from discord_cleanup.usernames.scanner import _InFlightEntry
+
+    leader_ready = threading.Event()
+    follower_joined = threading.Event()
+    original_init = _InFlightEntry.__init__
+    original_add = _InFlightEntry.add_waiter
+
+    def mark_leader(entry, *args, **kwargs):
+        original_init(entry, *args, **kwargs)
+        leader_ready.set()
+
+    def mark_follower(entry, slot):
+        added = original_add(entry, slot)
+        if added:
+            follower_joined.set()
+        return added
+
+    monkeypatch.setattr(_InFlightEntry, "__init__", mark_leader)
+    monkeypatch.setattr(_InFlightEntry, "add_waiter", mark_follower)
 
     # Hold the candidate lock briefly so Consumer A (with use_cache=False) and Consumer B (force_recheck=True) coalesce
     cand_lock = store.candidate_inflight_lock(PUBLIC_USERNAME_SCOPE, "abc")
     with ThreadPoolExecutor(max_workers=2) as pool:
         with cand_lock:
             fut_a = pool.submit(scanner_a.run, scan_a.id, PUBLIC_USERNAME_SCOPE, use_cache=False, force_recheck=False)
-            time.sleep(0.03)
+            assert leader_ready.wait(timeout=2.0)
             fut_b = pool.submit(scanner_b.recheck_names, PUBLIC_USERNAME_SCOPE, ["abc"])
-            time.sleep(0.04)
+            assert follower_joined.wait(timeout=2.0)
         res_a = fut_a.result(timeout=2.0)
         res_b = fut_b.result(timeout=2.0)
 

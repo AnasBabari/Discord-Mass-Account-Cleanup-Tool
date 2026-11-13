@@ -48,6 +48,7 @@ class TestWorkers:
             worker = LoginWorker(token="valid_token", client=mock_client)
             with qtbot.waitSignal(worker.result_signal, timeout=3000) as blocker:
                 worker.start()
+            assert worker.wait(3000)
 
         success, name, username, token, avatar_bytes, save = blocker.args
         assert success is True
@@ -63,6 +64,7 @@ class TestWorkers:
         worker = LoginWorker(token="invalid_token", client=mock_client)
         with qtbot.waitSignal(worker.result_signal, timeout=3000) as blocker:
             worker.start()
+        assert worker.wait(3000)
 
         success, name, _, _, _, _ = blocker.args
         assert success is False
@@ -75,6 +77,7 @@ class TestWorkers:
         worker = FetchServersWorker(token="token", client=mock_client)
         with qtbot.waitSignal(worker.result_signal, timeout=3000) as blocker:
             worker.start()
+        assert worker.wait(3000)
 
         guilds, err = blocker.args
         assert len(guilds) == 1
@@ -90,6 +93,7 @@ class TestWorkers:
         worker = FetchFriendsWorker(token="token", client=mock_client)
         with qtbot.waitSignal(worker.result_signal, timeout=3000) as blocker:
             worker.start()
+        assert worker.wait(3000)
 
         friends, err = blocker.args
         assert len(friends) == 1
@@ -105,6 +109,7 @@ class TestWorkers:
         worker = FetchBlockedWorker(token="token", client=mock_client)
         with qtbot.waitSignal(worker.result_signal, timeout=3000) as blocker:
             worker.start()
+        assert worker.wait(3000)
 
         blocked, err = blocker.args
         assert len(blocked) == 1
@@ -120,6 +125,7 @@ class TestWorkers:
 
         with qtbot.waitSignal(worker.finished_signal, timeout=3000) as blocker:
             worker.start()
+        assert worker.wait(3000)
 
         assert blocker.args[0] == 2
         assert mock_client.leave_guild.call_count == 2
@@ -138,6 +144,7 @@ class TestWorkers:
 
         with qtbot.waitSignal(worker.finished_signal, timeout=3000) as blocker:
             worker.start()
+        assert worker.wait(3000)
 
         assert blocker.args[0] == 1
         assert mock_client.remove_friend.call_count == 2  # Breaks early on 401
@@ -152,6 +159,7 @@ class TestWorkers:
         worker = ReadNotifsWorker(token="token", client=mock_client, gateway=mock_gateway)
         with qtbot.waitSignal(worker.finished_signal, timeout=3000) as blocker:
             worker.start()
+        assert worker.wait(3000)
 
         assert blocker.args[0] == 2
         assert worker.token == ""
