@@ -357,7 +357,7 @@ def main() -> None:
     if "--usernames" in sys.argv:
         extra = [arg for arg in sys.argv[1:] if arg != "--usernames"]
         if extra:
-            run_username_cli_args(sys.argv[1:])
+            raise SystemExit(run_username_cli_args(sys.argv[1:]))
         else:
             run_username_checker()
         return

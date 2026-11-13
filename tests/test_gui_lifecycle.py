@@ -25,6 +25,9 @@ class TestGuiLifecycle:
         emitted_text = blocker.args[0]
         assert "[REDACTED_TOKEN]" in emitted_text
         assert token not in emitted_text
+        written_text = mock_stream.write.call_args.args[0]
+        assert "[REDACTED_TOKEN]" in written_text
+        assert token not in written_text
 
     def test_login_and_logout_lifecycle(self, qapp, qtbot):
         with patch("discord_cleanup.security.credentials.DEFAULT_CREDENTIAL_STORE.get_token", return_value=None):

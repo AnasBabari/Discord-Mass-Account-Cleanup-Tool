@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from PyQt5.QtCore import pyqtSignal
@@ -23,9 +24,12 @@ class BatchActionWorker(CancellableTokenWorker):
         client: DiscordApiClient | None = None,
     ):
         super().__init__(token)
+        self._owns_client = client is None
         self.items = items
         self.action_name = action_name
-        self.client = client or DEFAULT_API_CLIENT
+        self.client = client if client is not None else copy.copy(DEFAULT_API_CLIENT)
+        if client is None:
+            self.client.set_token(token)
 
     def get_item_id(self, item: dict[str, Any]) -> str:
         return str(item.get("id", ""))
@@ -68,6 +72,8 @@ class BatchActionWorker(CancellableTokenWorker):
                     break
 
         self.finished_signal.emit(success, failed)
+        if self._owns_client:
+            self.client.clear_token()
         self.scrub_token()
 
 

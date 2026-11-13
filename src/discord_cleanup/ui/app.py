@@ -39,7 +39,6 @@ from discord_cleanup.ui.theme import (
     load_stylesheet,
 )
 from discord_cleanup.workers.login import LoginWorker
-from discord_cleanup.workers.usernames import UsernameResultsWorker, UsernameScanWorker
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +53,11 @@ class StreamInterceptor(QObject):
         self.original_stream = original_stream
 
     def write(self, text: str) -> None:
+        clean = sanitize_token(text)
         if self.original_stream:
-            self.original_stream.write(text)
-        if text.strip():
-            clean = sanitize_token(text.strip())
-            self.text_written.emit(clean)
+            self.original_stream.write(clean)
+        if clean.strip():
+            self.text_written.emit(clean.strip())
 
     def flush(self) -> None:
         if self.original_stream and hasattr(self.original_stream, "flush"):
@@ -432,13 +431,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self.cancel_all_workers()
-        if any(isinstance(worker, (UsernameScanWorker, UsernameResultsWorker)) and worker.isRunning() for worker in self.active_workers):
+        if any(worker.isRunning() for worker in self.active_workers):
             event.ignore()
-            self.usernames_page.pause_scan()
             QTimer.singleShot(100, self.close)
             return
-        for worker in list(self.active_workers):
-            worker.wait(1000)
         event.accept()
 
 

@@ -336,6 +336,27 @@ class UsernameScanner:
 
         if not can_dispatch_network():
             raise RequestCancelledError("Network request budget reached before dispatch.")
+        cooldown_until, _ = self.store.cooldown(route_url, scope=account_id)
+        remaining = cooldown_until - self.clock()
+        cooldown_deadline = self.monotonic() + max(0.0, remaining)
+        while self.monotonic() < cooldown_deadline:
+            active_deadline = max_wait_deadline_mono() if callable(max_wait_deadline_mono) else max_wait_deadline_mono
+            if self._is_deadline_expired(active_deadline):
+                raise RequestCancelledError("Active duration budget reached during saved cooldown.")
+            if cancel_event.wait(min(remaining, 0.25)):
+                raise RequestCancelledError("Username check cancelled during saved cooldown.")
+            remaining = max(0.0, cooldown_deadline - self.monotonic())
+
+        request_backoff = on_backoff
+
+        def persist_backoff(seconds: float) -> None:
+            self.store.save_cooldown(
+                route_url, self.clock() + max(0.0, seconds), "Rate limited", scope=account_id
+            )
+            request_backoff(seconds)
+
+        on_backoff = persist_backoff
+
         req_start = self.clock()
         req_start_iso = self._now_iso()
         if self._supports_extended_kwargs():
@@ -557,6 +578,8 @@ class UsernameScanner:
                         entry.remove_waiter(slot)
                         if entry.shared_cancel.is_set() and entry.worker_thread is not None:
                             entry.worker_thread.join(timeout=0.5)
+                        if entry.done.is_set() and entry.error is None and entry.result is not None:
+                            break
                         raise RequestCancelledError("Username check cancelled.")
                     if self._is_deadline_expired(max_wait_deadline_mono):
                         consumer_cancel.set()
@@ -572,7 +595,10 @@ class UsernameScanner:
                     slot.attempts_committed > 0
                     or (entry.total_attempts_committed == 0 and is_leader and not entry.cross_process_dedup)
                 )
-                if cancelled_while_waiting or (cancel_event.is_set() and not this_slot_dispatched):
+                completed_result = entry.done.is_set() and entry.error is None and entry.result is not None
+                if (cancelled_while_waiting and not completed_result) or (
+                    cancel_event.is_set() and not this_slot_dispatched and not completed_result
+                ):
                     consumer_cancel.set()
                     raise RequestCancelledError("Username check cancelled.")
                 if self._is_deadline_expired(max_wait_deadline_mono) and slot.attempts_committed == 0:

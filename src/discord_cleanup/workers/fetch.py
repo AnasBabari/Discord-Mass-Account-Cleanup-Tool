@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from PyQt5.QtCore import pyqtSignal
@@ -15,7 +16,10 @@ class FetchServersWorker(CancellableTokenWorker):
 
     def __init__(self, token: str, client: DiscordApiClient | None = None):
         super().__init__(token)
-        self.client = client or DEFAULT_API_CLIENT
+        self._owns_client = client is None
+        self.client = client if client is not None else copy.copy(DEFAULT_API_CLIENT)
+        if client is None:
+            self.client.set_token(token)
 
     def run(self) -> None:
         if not self.token or self.is_cancelled():
@@ -32,6 +36,8 @@ class FetchServersWorker(CancellableTokenWorker):
         except Exception as exc:
             self.result_signal.emit([], str(exc))
         finally:
+            if self._owns_client:
+                self.client.clear_token()
             self.scrub_token()
 
 
@@ -42,7 +48,10 @@ class FetchFriendsWorker(CancellableTokenWorker):
 
     def __init__(self, token: str, client: DiscordApiClient | None = None):
         super().__init__(token)
-        self.client = client or DEFAULT_API_CLIENT
+        self._owns_client = client is None
+        self.client = client if client is not None else copy.copy(DEFAULT_API_CLIENT)
+        if client is None:
+            self.client.set_token(token)
 
     def run(self) -> None:
         if not self.token or self.is_cancelled():
@@ -68,6 +77,8 @@ class FetchFriendsWorker(CancellableTokenWorker):
         except Exception as exc:
             self.result_signal.emit([], str(exc))
         finally:
+            if self._owns_client:
+                self.client.clear_token()
             self.scrub_token()
 
 
@@ -78,7 +89,10 @@ class FetchBlockedWorker(CancellableTokenWorker):
 
     def __init__(self, token: str, client: DiscordApiClient | None = None):
         super().__init__(token)
-        self.client = client or DEFAULT_API_CLIENT
+        self._owns_client = client is None
+        self.client = client if client is not None else copy.copy(DEFAULT_API_CLIENT)
+        if client is None:
+            self.client.set_token(token)
 
     def run(self) -> None:
         if not self.token or self.is_cancelled():
@@ -102,4 +116,6 @@ class FetchBlockedWorker(CancellableTokenWorker):
         except Exception as exc:
             self.result_signal.emit([], str(exc))
         finally:
+            if self._owns_client:
+                self.client.clear_token()
             self.scrub_token()

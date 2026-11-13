@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from discord_cleanup.api.client import DiscordApiClient
 from discord_cleanup.api.exceptions import AuthenticationError
 from discord_cleanup.models.domain import Guild, Relationship, RelationshipType, User
 from discord_cleanup.workers.batch import (
@@ -18,6 +19,24 @@ from discord_cleanup.workers.notifications import ReadNotifsWorker
 
 
 class TestWorkers:
+    def test_default_fetch_worker_uses_isolated_session_token(self):
+        shared_client = DiscordApiClient("", transport=MagicMock())
+        with patch("discord_cleanup.workers.fetch.DEFAULT_API_CLIENT", shared_client):
+            worker = FetchServersWorker(token="session-token")
+
+        assert worker.client is not shared_client
+        assert worker.client.token == "session-token"
+        assert shared_client.token == ""
+
+    def test_default_notifications_worker_uses_isolated_session_token(self):
+        shared_client = DiscordApiClient("", transport=MagicMock())
+        with patch("discord_cleanup.workers.notifications.DEFAULT_API_CLIENT", shared_client):
+            worker = ReadNotifsWorker(token="session-token", gateway=MagicMock())
+
+        assert worker.client is not shared_client
+        assert worker.client.token == "session-token"
+        assert shared_client.token == ""
+
     def test_login_worker_success(self, qapp, qtbot):
         mock_client = MagicMock()
         mock_client.verify_token.return_value = User(

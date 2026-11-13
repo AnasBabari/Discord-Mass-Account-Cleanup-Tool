@@ -736,6 +736,49 @@ def test_non_interactive_cli_preview_check_export_and_diagnostics(monkeypatch, t
     assert "Cache Hits Reused:" in diag_out
 
 
+def test_cli_rejects_empty_explicit_input_without_generating_candidates(monkeypatch, tmp_path, capsys):
+    transport = MagicMock()
+    monkeypatch.setattr(cli, "RequestsTransport", lambda *a, **kw: transport)
+    empty_file = tmp_path / "empty.txt"
+    empty_file.write_text("  \n", encoding="utf-8")
+
+    assert cli.run_username_cli_args(
+        ["--input-file", str(empty_file)], store_path=tmp_path / "empty_cli.db"
+    ) == 1
+    assert "No candidate usernames provided" in capsys.readouterr().out
+    transport.request.assert_not_called()
+
+
+def test_signed_in_rate_limit_cooldown_is_saved_and_honored(tmp_path):
+    from discord_cleanup.api.client import DiscordApiClient
+
+    store = UsernameScanStore(tmp_path / "account_cooldown.db")
+    transport = MagicMock()
+    transport.request.return_value = MockResponse(
+        status_code=429,
+        json_data={"retry_after": 600},
+        headers={"Retry-After": "600"},
+    )
+    client = DiscordApiClient("account-token", transport=transport, max_retries=3)
+    scanner = UsernameScanner(store, client)
+    scan = store.create_scan("account-123", mode="custom", names=["abc"])
+    paused = scanner.run(scan.id, "account-123", budget=RequestBudget(max_network_requests=1))
+
+    assert paused.status == "paused"
+    route = f"{client.base_url}/users/@me/pomelo-attempt"
+    retry_at, reason = store.cooldown(route, scope="account-123")
+    assert retry_at >= time.time() + 590
+    assert reason == "Rate limited"
+
+    fresh_client = DiscordApiClient("account-token", transport=transport)
+    fresh_scanner = UsernameScanner(store, fresh_client)
+    fresh_scan = store.create_scan("account-123", mode="custom", names=["xyz"])
+    cancelled = threading.Event()
+    cancelled.set()
+    fresh_scanner.run(fresh_scan.id, "account-123", cancelled)
+    assert transport.request.call_count == 1
+
+
 def test_desktop_page_minimum_size_strategy_watchlist_and_health_reset(qtbot, monkeypatch, tmp_path):
     store_path = tmp_path / "ui_new.db"
     store = UsernameScanStore(store_path)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import time
 from typing import Any
 
@@ -25,7 +26,10 @@ class ReadNotifsWorker(CancellableTokenWorker):
         gateway: GatewayNotificationsReader | None = None,
     ):
         super().__init__(token)
-        self.client = client or DEFAULT_API_CLIENT
+        self._owns_client = client is None
+        self.client = client if client is not None else copy.copy(DEFAULT_API_CLIENT)
+        if client is None:
+            self.client.set_token(token)
         self.gateway = gateway or DEFAULT_GATEWAY_READER
 
     def run(self) -> None:
@@ -92,4 +96,6 @@ class ReadNotifsWorker(CancellableTokenWorker):
         except Exception as exc:
             self.finished_signal.emit(0, 0, str(exc))
         finally:
+            if self._owns_client:
+                self.client.clear_token()
             self.scrub_token()

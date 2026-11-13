@@ -231,7 +231,8 @@ def run_username_cli_args(
             custom_raw = f"{custom_raw}\n{file_text}" if custom_raw else file_text
         names = parse_custom_names(custom_raw)
 
-        mode = "custom" if (names or args.strategy == "watchlist") else "generated"
+        explicit_custom_input = any(flag in argv for flag in ("--check", "--names", "--input-file"))
+        mode = "custom" if (explicit_custom_input or names or args.strategy == "watchlist") else "generated"
         if args.strategy == "watchlist" and not names:
             names = store.watchlist_candidates(
                 account_id,
@@ -240,6 +241,9 @@ def run_username_cli_args(
             ) or [str(item["username"]) for item in store.list_watchlist(account_id)]
 
         if args.preview:
+            if mode == "custom" and not names:
+                print("No candidate usernames provided.")
+                return 1
             prev = preview_candidates(mode, lengths, names, prefs, sample_size=15)
             print(
                 f"Candidate preview ({prev.strategy_summary}): {prev.total_candidates:,} total "
@@ -299,6 +303,8 @@ def run_username_cli_args(
         if args.export_path:
             store.export_csv(final.id, account_id, args.export_path)
             print(f"Exported results to {args.export_path}")
+        if final.status == "failed" or final.error:
+            return 1
         return 0
     except KeyboardInterrupt:
         print("\nInterrupted; completed checks and cursor are saved.")
