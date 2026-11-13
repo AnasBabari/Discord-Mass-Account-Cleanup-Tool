@@ -151,15 +151,28 @@ def test_shared_check_retry_transfers_budget_from_consumer_a_to_consumer_b(tmp_p
     assert res_a.network_checks + res_b.network_checks == diag.network_requests_total
 
 
-def test_consumer_a_cancels_between_reservation_and_dispatch_transfers_to_consumer_b(tmp_path: Path) -> None:
+def test_consumer_a_cancels_between_reservation_and_dispatch_transfers_to_consumer_b(tmp_path: Path, monkeypatch) -> None:
     """If Consumer A cancels after budget reservation before commit, A's reservation rolls back and B is charged."""
     store = UsernameScanStore(tmp_path / "cancel_transfer.db")
     b_joined = threading.Event()
     cancel_a = threading.Event()
+    a_reserved = threading.Event()
+    from discord_cleanup.usernames.scanner import _InFlightEntry
+
+    original_add_waiter = _InFlightEntry.add_waiter
+
+    def add_waiter(entry, slot):
+        added = original_add_waiter(entry, slot)
+        if added:
+            b_joined.set()
+        return added
+
+    monkeypatch.setattr(_InFlightEntry, "add_waiter", add_waiter)
 
     def hook_cancel_a() -> None:
         # Wait until Consumer B has joined the in-flight entry, then cancel Consumer A right before commit!
-        b_joined.wait(timeout=2.0)
+        a_reserved.set()
+        assert b_joined.wait(timeout=2.0)
         cancel_a.set()
 
     transport = MagicMock()
@@ -181,15 +194,13 @@ def test_consumer_a_cancels_between_reservation_and_dispatch_transfers_to_consum
             cancel_a,
             budget=RequestBudget(max_network_requests=1),
         )
-        time.sleep(0.03)
+        assert a_reserved.wait(timeout=2.0)
         fut_b = pool.submit(
             scanner_b.run,
             scan_b.id,
             PUBLIC_USERNAME_SCOPE,
             budget=RequestBudget(max_network_requests=2),
         )
-        time.sleep(0.03)
-        b_joined.set()
         res_a = fut_a.result(timeout=3.0)
         res_b = fut_b.result(timeout=3.0)
 

@@ -179,22 +179,26 @@ class _InFlightEntry:
 
     def reserve_and_commit_attempt(self) -> None:
         """Atomically select an eligible active consumer, reserve its budget, verify liveness, and commit."""
-        with self.lock:
-            self._sync_shared_cancel_unlocked()
-            for slot in list(self.slots):
-                if not slot.is_active():
-                    continue
-                if not slot.try_reserve_fn():
-                    continue
-                try:
-                    if slot.before_commit_hook is not None:
-                        slot.before_commit_hook()
-                except BaseException:
+        attempted: set[int] = set()
+        while True:
+            with self.lock:
+                self._sync_shared_cancel_unlocked()
+                slot = next((s for s in self.slots if id(s) not in attempted and s.is_active() and s.try_reserve_fn()), None)
+                if slot is None:
+                    if self.shared_cancel.is_set():
+                        raise RequestCancelledError("Username check cancelled before dispatch.")
+                    raise RequestCancelledError("Network request budget reached before dispatch.")
+                attempted.add(id(slot))
+            try:
+                if slot.before_commit_hook is not None:
+                    slot.before_commit_hook()
+            except BaseException:
+                with self.lock:
                     slot.release_reserved_fn()
                     self._sync_shared_cancel_unlocked()
-                    raise
+                raise
+            with self.lock:
                 if not slot.is_active():
-                    # Cancelled or expired between reservation and dispatch: roll back reservation and transfer!
                     slot.release_reserved_fn()
                     self._sync_shared_cancel_unlocked()
                     continue
@@ -203,10 +207,6 @@ class _InFlightEntry:
                 self.total_attempts_committed += 1
                 self.last_committer_slot = slot
                 return
-            self._sync_shared_cancel_unlocked()
-            if self.shared_cancel.is_set():
-                raise RequestCancelledError("Username check cancelled before dispatch.")
-            raise RequestCancelledError("Network request budget reached before dispatch.")
 
     def _sync_shared_cancel_unlocked(self) -> None:
         active = [s for s in self.slots if s.is_active()]
