@@ -578,7 +578,7 @@ class UsernameScanner:
                         entry.remove_waiter(slot)
                         if entry.shared_cancel.is_set() and entry.worker_thread is not None:
                             entry.worker_thread.join(timeout=0.5)
-                        if entry.done.is_set() and entry.error is None and entry.result is not None:
+                        if slot.attempts_committed and entry.done.is_set() and entry.error is None and entry.result is not None:
                             break
                         raise RequestCancelledError("Username check cancelled.")
                     if self._is_deadline_expired(max_wait_deadline_mono):
@@ -595,7 +595,7 @@ class UsernameScanner:
                     slot.attempts_committed > 0
                     or (entry.total_attempts_committed == 0 and is_leader and not entry.cross_process_dedup)
                 )
-                completed_result = entry.done.is_set() and entry.error is None and entry.result is not None
+                completed_result = this_slot_dispatched and entry.done.is_set() and entry.error is None and entry.result is not None
                 if (cancelled_while_waiting and not completed_result) or (
                     cancel_event.is_set() and not this_slot_dispatched and not completed_result
                 ):
