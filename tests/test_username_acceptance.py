@@ -82,16 +82,29 @@ class MockResponse:
 # ===========================================================================
 
 
-def test_shared_check_retry_transfers_budget_from_consumer_a_to_consumer_b(tmp_path: Path) -> None:
+def test_shared_check_retry_transfers_budget_from_consumer_a_to_consumer_b(tmp_path: Path, monkeypatch) -> None:
     """Consumer A has budget=1; Consumer B has budget=5; shared check requires a retry (2 attempts total)."""
     store = UsernameScanStore(tmp_path / "atomic_retry.db")
     both_joined = threading.Event()
+    first_request = threading.Event()
     attempt_count = 0
     attempt_lock = threading.Lock()
+    from discord_cleanup.usernames.scanner import _InFlightEntry
+
+    original_add_waiter = _InFlightEntry.add_waiter
+
+    def add_waiter(entry, slot):
+        added = original_add_waiter(entry, slot)
+        if added:
+            both_joined.set()
+        return added
+
+    monkeypatch.setattr(_InFlightEntry, "add_waiter", add_waiter)
 
     def transport_request(method: str, url: str, json_data: Any = None, **kwargs: Any) -> MockResponse:
         nonlocal attempt_count
-        both_joined.wait(timeout=2.0)
+        first_request.set()
+        assert both_joined.wait(timeout=10.0)
         with attempt_lock:
             attempt_count += 1
             current = attempt_count
@@ -121,17 +134,15 @@ def test_shared_check_retry_transfers_budget_from_consumer_a_to_consumer_b(tmp_p
             PUBLIC_USERNAME_SCOPE,
             budget=RequestBudget(max_network_requests=1),
         )
-        time.sleep(0.03)
+        assert first_request.wait(timeout=10.0)
         fut_b = pool.submit(
             scanner_b.run,
             scan_b.id,
             PUBLIC_USERNAME_SCOPE,
             budget=RequestBudget(max_network_requests=5),
         )
-        time.sleep(0.03)
-        both_joined.set()
-        res_a = fut_a.result(timeout=3.0)
-        res_b = fut_b.result(timeout=3.0)
+        res_a = fut_a.result(timeout=15.0)
+        res_b = fut_b.result(timeout=15.0)
 
     assert attempt_count == 2
     assert res_a.status == "completed"
